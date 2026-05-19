@@ -1,10 +1,11 @@
 pub mod allocator;
+pub mod bucket_allocator;
 pub mod paging;
 
 use core::alloc::{GlobalAlloc, Layout};
 use spin::Mutex;
 
-use self::allocator::LinkedListAllocator;
+use self::bucket_allocator::BucketAllocator;
 
 pub const HEAP_SIZE: usize = 2 * 1024 * 1024;
 
@@ -15,7 +16,7 @@ struct HeapRegion([u8; HEAP_SIZE]);
 static mut HEAP: HeapRegion = HeapRegion([0; HEAP_SIZE]);
 
 struct KernelAllocator {
-    inner: Mutex<LinkedListAllocator>,
+    inner: Mutex<BucketAllocator>,
 }
 
 unsafe impl GlobalAlloc for KernelAllocator {
@@ -36,7 +37,7 @@ unsafe impl GlobalAlloc for KernelAllocator {
 
 #[global_allocator]
 static ALLOCATOR: KernelAllocator = KernelAllocator {
-    inner: Mutex::new(LinkedListAllocator::new()),
+    inner: Mutex::new(BucketAllocator::new()),
 };
 
 pub fn init_heap() {

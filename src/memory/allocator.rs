@@ -194,23 +194,7 @@ impl LinkedListAllocator {
 }
 
 pub fn dump_free_list() {
-    let alloc = crate::memory::ALLOCATOR.inner.lock();
-    crate::serial::write_fmt(format_args!("Free list:"));
-    let mut count = 0;
-    let mut total = 0usize;
-    let mut cursor = &alloc.head.next;
-    while let Some(node) = cursor {
-        let node_ref = unsafe { node.as_ref() };
-        crate::serial::write_fmt(format_args!(" [{:08x}->{}b]", node_ref.start_addr(), node_ref.size));
-        total += node_ref.size;
-        count += 1;
-        cursor = &node_ref.next;
-        if count > 16 { 
-            crate::serial::write_fmt(format_args!(" ..."));
-            break; 
-        }
-    }
-    crate::serial::write_fmt(format_args!(" ({} blocks, {} bytes free)\n", count, total));
+    crate::memory::bucket_allocator::dump_stats();
 }
 
 fn align_up(addr: usize, align: usize) -> usize {

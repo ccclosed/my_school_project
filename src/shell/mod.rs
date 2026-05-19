@@ -381,7 +381,7 @@ fn cmd_mem(verbose: bool) {
     println!("heap free: {} bytes", free);
     println!("heap total: {} bytes", memory::HEAP_SIZE);
     if verbose {
-        crate::memory::allocator::dump_free_list();
+        memory::bucket_allocator::dump_stats();
     }
 }
 
