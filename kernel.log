@@ -1,0 +1,25 @@
+Rust Kernel (i686) - boot OK
+Heap: 2048 KiB
+Heap alloc test: OK (42)
+[16:29:10] [0.005] [I] PCI: 10ec:8139 class=02 subclass=00
+[16:29:10] [0.006] [I] RTL8139 init at I/O base 0xc000
+[16:29:10] [0.006] [D] RTL8139 MAC: 52:54:00:12:34:56
+Network init: OK
+[16:29:10] [0.007] [I] Scheduler: idle=0, 7 slots free
+Type 'help' for commands.
+kernel> spaswn test
+[16:29:13] [2.047] [I] Task 1 spawned, entry=0x0010851a
+Task 1 spawned
+kernel> ps
+[E] EXCEPTION: Page Fault at 0xffffffff
+--- Stack trace ---
+  #00  0x0010abdf
+  #01  0x00101065
+  #02  0x0010ac83
+  #03  0x0010aed6
+  #04  0x0010ae77
+  #05  0x0010af12
+  #06  0x00103fd2
+  #07  0x0010aa59
+  #08  0x0010100b
+-------------------

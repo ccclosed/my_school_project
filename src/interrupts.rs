@@ -1,0 +1,100 @@
+use x86::io::outb;
+
+use crate::arch;
+
+use crate::keyboard;
+
+const PIC1_CMD: u16 = 0x20;
+const PIC1_DATA: u16 = 0x21;
+const PIC2_CMD: u16 = 0xA0;
+const PIC2_DATA: u16 = 0xA1;
+const PIC_EOI: u8 = 0x20;
+
+pub fn init_pic() {
+    unsafe {
+        outb(PIC1_CMD, 0x11);
+        outb(PIC1_DATA, 0x20);
+        outb(PIC1_DATA, 0x04);
+        outb(PIC1_DATA, 0x01);
+        outb(PIC2_CMD, 0x11);
+        outb(PIC2_DATA, 0x28);
+        outb(PIC2_DATA, 0x02);
+        outb(PIC2_DATA, 0x01);
+        outb(PIC1_DATA, 0xFC); // Unmask IRQ0 (timer) and IRQ1 (keyboard)
+        outb(PIC2_DATA, 0xEF); // Unmask IRQ12 (mouse) - bit 4 = 0
+    }
+}
+
+fn eoi(irq: u8) {
+    unsafe {
+        if irq >= 8 {
+            outb(PIC2_CMD, PIC_EOI);
+        }
+        outb(PIC1_CMD, PIC_EOI);
+    }
+}
+
+/// Exception frame pushed by CPU on interrupt (without error code)
+#[allow(dead_code)]
+#[repr(C)]
+struct ExceptionFrame {
+    eip: u32,
+    cs: u32,
+    eflags: u32,
+}
+
+#[no_mangle]
+pub extern "C" fn divide_handler() {
+    crate::serial::write_fmt(format_args!("[E] EXCEPTION: Divide by Zero\n"));
+    arch::print_stack_trace();
+    loop { arch::hlt(); }
+}
+
+#[no_mangle]
+pub extern "C" fn invalid_opcode_handler() {
+    crate::serial::write_fmt(format_args!("[E] EXCEPTION: Invalid Opcode\n"));
+    arch::print_stack_trace();
+    loop { arch::hlt(); }
+}
+
+#[no_mangle]
+pub extern "C" fn gpf_handler() {
+    crate::serial::write_fmt(format_args!("[E] EXCEPTION: General Protection Fault\n"));
+    arch::print_stack_trace();
+    loop { arch::hlt(); }
+}
+
+#[no_mangle]
+pub extern "C" fn page_fault_handler() {
+    let cr2: u32;
+    unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2); }
+    crate::serial::write_fmt(format_args!("[E] EXCEPTION: Page Fault at 0x{:08x}\n", cr2));
+    arch::print_stack_trace();
+    loop { arch::hlt(); }
+}
+
+#[no_mangle]
+pub extern "C" fn double_fault_handler() {
+    crate::serial::write_fmt(format_args!("[E] EXCEPTION: Double Fault\n"));
+    loop { arch::hlt(); }
+}
+
+#[no_mangle]
+pub extern "C" fn timer_handler(pushad_esp: u32) -> u32 {
+    crate::timer::tick();
+    let new_esp = crate::scheduler::schedule(pushad_esp);
+    eoi(0);
+    new_esp
+}
+
+#[no_mangle]
+pub extern "C" fn keyboard_handler() {
+    keyboard::handle_irq();
+    eoi(1);
+}
+
+#[no_mangle]
+pub extern "C" fn mouse_handler() {
+    crate::mouse::handle_irq();
+    eoi(12);
+}

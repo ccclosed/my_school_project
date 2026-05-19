@@ -1,0 +1,7 @@
+[build]
+target = "i686-unknown-none.json"
+rustc = "tools/rustc-filter.exe"
+rustflags = ["-C", "link-arg=-Tlinker.ld", "-C", "force-frame-pointers=yes"]
+
+[unstable]
+json-target-spec = true

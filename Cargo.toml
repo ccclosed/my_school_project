@@ -1,0 +1,18 @@
+[package]
+name = "rust-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spin = "0.9"
+x86 = "0.52"
+lazy_static = { version = "1.4", features = ["spin_no_std"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"        # Optimize for size (smaller than "s")
+codegen-units = 1      # Better optimization, slower compile

@@ -1,0 +1,5 @@
+# MSVC nightlies on Windows often lack bare-metal targets and break JSON specs.
+# The GNU host toolchain supports i686-unknown-none with build-std.
+[toolchain]
+channel = "nightly-x86_64-pc-windows-gnu"
+components = ["rust-src", "llvm-tools-preview"]
