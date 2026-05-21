@@ -41,7 +41,7 @@ pub extern "C" fn kernel_main() -> ! {
     memory::paging::init();
     memory::paging::enable();
 
-    println!("Rust Kernel (i686) - boot OK");
+    println!("Rust Kernel (x86_64) - boot OK");
     println!("Heap: {} KiB", memory::HEAP_SIZE / 1024);
 
     // Quick heap sanity check before heavier subsystems.
@@ -53,6 +53,29 @@ pub extern "C" fn kernel_main() -> ! {
 
     drivers::net::init();
     println!("Network init: OK");
+
+    // Auto-configure network via DHCP if NIC is available
+    let net_status = drivers::net::status();
+    if net_status.kind != drivers::net::NicKind::None {
+        println!("Requesting IP via DHCP...");
+        let xid = timer::millis() as u32;
+        match drivers::net::dhcp::dhcp_request(&net_status.mac, xid) {
+            Some(cfg) => {
+                drivers::net::set_config(cfg);
+                println!("DHCP: IP {}.{}.{}.{}", cfg.ip[0], cfg.ip[1], cfg.ip[2], cfg.ip[3]);
+                println!("      Gateway {}.{}.{}.{}", cfg.gateway[0], cfg.gateway[1], cfg.gateway[2], cfg.gateway[3]);
+            }
+            None => {
+                println!("DHCP: timeout, using fallback IP 10.0.2.15");
+                drivers::net::set_config(drivers::net::NetConfig {
+                    ip: [10, 0, 2, 15],
+                    subnet: [255, 255, 255, 0],
+                    gateway: [10, 0, 2, 2],
+                    dns: [8, 8, 8, 8],
+                });
+            }
+        }
+    }
 
     scheduler::init();
 
