@@ -16,12 +16,11 @@ fn cpuid(leaf: u32) -> CpuidResult {
     let edx: u32;
     unsafe {
         core::arch::asm!(
-            "push ebx",
+            "mov {tmp:r}, rbx",
             "cpuid",
-            "mov {ebx_out:e}, ebx",
-            "pop ebx",
+            "xchg {tmp:r}, rbx",
+            tmp = out(reg) ebx,
             inout("eax") leaf => eax,
-            ebx_out = out(reg) ebx,
             out("ecx") ecx,
             out("edx") edx,
         );

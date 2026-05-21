@@ -2,7 +2,8 @@ use core::mem::size_of;
 
 const ACCESS_CODE: u8 = 0x9A;
 const ACCESS_DATA: u8 = 0x92;
-const GRAN_4K_32: u8 = 0xCF;
+const GRAN_4K_64: u8 = 0xAF; // 64-bit code segment
+const GRAN_DATA: u8 = 0xCF;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -32,9 +33,8 @@ impl GdtEntry {
     }
 }
 
-/// TSS descriptor (8 bytes) — unlike a regular segment descriptor.
-/// For a 32-bit TSS, the base is 32-bit and the limit is 20 bits (max 104 bytes).
-#[repr(C)]
+/// TSS descriptor (16 bytes for x86_64) — takes two GDT entries.
+#[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct TssDescriptor {
     limit_low: u16,
@@ -43,11 +43,13 @@ struct TssDescriptor {
     access: u8,
     granularity: u8,
     base_high: u8,
+    base_upper: u32,
+    reserved: u32,
 }
 
 impl TssDescriptor {
     fn from_tss(tss: &TaskStateSegment) -> Self {
-        let base = tss as *const _ as u32;
+        let base = tss as *const _ as u64;
         let limit = (size_of::<TaskStateSegment>() - 1) as u16;
         Self {
             limit_low: limit,
@@ -56,80 +58,65 @@ impl TssDescriptor {
             access: 0x89,
             granularity: 0x00,
             base_high: (base >> 24) as u8,
+            base_upper: (base >> 32) as u32,
+            reserved: 0,
         }
     }
 }
 
-/// i686 Task State Segment (104 bytes, Intel Vol3 Figure 7-2).
+/// x86_64 Task State Segment (104 bytes minimum).
 #[repr(C, packed)]
 struct TaskStateSegment {
-    prev: u16,
-    _reserved0: u16,
-    esp0: u32,
-    ss0: u16,
-    _reserved1: u16,
-    esp1: u32,
-    ss1: u16,
-    _reserved2: u16,
-    esp2: u32,
-    ss2: u16,
+    _reserved0: u32,
+    rsp0: u64,
+    rsp1: u64,
+    rsp2: u64,
+    _reserved1: u64,
+    ist1: u64,
+    ist2: u64,
+    ist3: u64,
+    ist4: u64,
+    ist5: u64,
+    ist6: u64,
+    ist7: u64,
+    _reserved2: u64,
     _reserved3: u16,
-    cr3: u32,
-    eip: u32,
-    eflags: u32,
-    eax: u32,
-    ecx: u32,
-    edx: u32,
-    ebx: u32,
-    esp: u32,
-    ebp: u32,
-    esi: u32,
-    edi: u32,
-    es: u16,
-    _reserved4: u16,
-    cs: u16,
-    _reserved5: u16,
-    ss: u16,
-    _reserved6: u16,
-    ds: u16,
-    _reserved7: u16,
-    fs: u16,
-    _reserved8: u16,
-    gs: u16,
-    _reserved9: u16,
-    ldt: u16,
-    _reserved10: u16,
-    _reserved11: u16,
     io_map_base: u16,
 }
 
 #[repr(C, packed)]
 struct GdtPointer {
     limit: u16,
-    base: u32,
+    base: u64,
 }
 
-/// Full GDT: null, code, data, TSS descriptor.
+/// Full GDT: null, code, data, user code, user data, TSS descriptor (16 bytes).
 #[repr(C, packed)]
 struct GdtStruct {
-    entries: [GdtEntry; 3],
+    entries: [GdtEntry; 5],
     tss: TssDescriptor,
 }
 
 static mut GDT: GdtStruct = GdtStruct {
     entries: [
         GdtEntry::null(),
-        GdtEntry::new(0, 0xFFFFF, ACCESS_CODE, GRAN_4K_32),
-        GdtEntry::new(0, 0xFFFFF, ACCESS_DATA, GRAN_4K_32),
+        GdtEntry::new(0, 0, ACCESS_CODE, GRAN_4K_64),  // Kernel code (64-bit)
+        GdtEntry::new(0, 0, ACCESS_DATA, GRAN_DATA),   // Kernel data
+        GdtEntry::new(0, 0, 0xFA, GRAN_4K_64),         // User code (ring 3)
+        GdtEntry::new(0, 0, 0xF2, GRAN_DATA),          // User data (ring 3)
     ],
-    // TSS descriptor filled at runtime via init_tss()
-    tss: TssDescriptor { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 },
+    // TSS descriptor filled at runtime
+    tss: TssDescriptor { 
+        limit_low: 0, base_low: 0, base_middle: 0, access: 0, 
+        granularity: 0, base_high: 0, base_upper: 0, reserved: 0 
+    },
 };
 
 pub const KERNEL_CODE_SELECTOR: u16 = 0x08;
+#[allow(dead_code)]
 pub const KERNEL_DATA_SELECTOR: u16 = 0x10;
 #[allow(dead_code)]
-const TSS_SELECTOR: u16 = 0x18;
+const TSS_SELECTOR: u16 = 0x28;
 
 // Reference to the dedicated double-fault stack defined in asm.rs.
 extern "C" {
@@ -137,14 +124,20 @@ extern "C" {
 }
 
 static mut TSS: TaskStateSegment = TaskStateSegment {
-    prev: 0, _reserved0: 0, esp0: 0, ss0: KERNEL_DATA_SELECTOR,
-    _reserved1: 0, esp1: 0, ss1: 0, _reserved2: 0,
-    esp2: 0, ss2: 0, _reserved3: 0,
-    cr3: 0, eip: 0, eflags: 0, eax: 0, ecx: 0, edx: 0, ebx: 0,
-    esp: 0, ebp: 0, esi: 0, edi: 0,
-    es: 0, _reserved4: 0, cs: 0, _reserved5: 0, ss: 0, _reserved6: 0,
-    ds: 0, _reserved7: 0, fs: 0, _reserved8: 0, gs: 0, _reserved9: 0,
-    ldt: 0, _reserved10: 0, _reserved11: 0,
+    _reserved0: 0,
+    rsp0: 0,
+    rsp1: 0,
+    rsp2: 0,
+    _reserved1: 0,
+    ist1: 0,
+    ist2: 0,
+    ist3: 0,
+    ist4: 0,
+    ist5: 0,
+    ist6: 0,
+    ist7: 0,
+    _reserved2: 0,
+    _reserved3: 0,
     io_map_base: size_of::<TaskStateSegment>() as u16,
 };
 
@@ -156,8 +149,8 @@ extern "C" {
 
 pub fn init() {
     unsafe {
-        TSS.esp0 = (&df_stack_top as *const u8) as u32;
-        TSS.ss0 = KERNEL_DATA_SELECTOR;
+        TSS.rsp0 = (&df_stack_top as *const u8) as u64;
+        TSS.ist1 = (&df_stack_top as *const u8) as u64;
 
         let tss_ref: &TaskStateSegment = &*core::ptr::addr_of!(TSS);
         GDT.tss = TssDescriptor::from_tss(tss_ref);
@@ -165,7 +158,7 @@ pub fn init() {
 
     let ptr = GdtPointer {
         limit: (size_of::<GdtStruct>() - 1) as u16,
-        base: unsafe { core::ptr::addr_of!(GDT) as u32 },
+        base: core::ptr::addr_of_mut!(GDT) as u64,
     };
     unsafe {
         load_gdt(&ptr);

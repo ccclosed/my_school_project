@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Ipv4Packet<'a> {
     pub version: u8,
     pub header_len: u8,

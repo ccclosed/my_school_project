@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct UdpHeader<'a> {
     pub src_port: u16,
     pub dst_port: u16,

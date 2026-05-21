@@ -37,15 +37,18 @@ impl ScrollbackBuffer {
         }
     }
 
+    #[allow(dead_code)]
     fn scroll_up(&mut self, lines: usize) {
         let max_scroll = self.current_line.saturating_sub(CONTENT_ROWS);
         self.scroll_offset = (self.scroll_offset + lines).min(max_scroll);
     }
 
+    #[allow(dead_code)]
     fn scroll_down(&mut self, lines: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(lines);
     }
 
+    #[allow(dead_code)]
     fn get_line(&self, visible_row: usize) -> Option<&[u8; WIDTH * 2]> {
         if self.current_line < CONTENT_ROWS {
             // Not enough history yet
@@ -356,6 +359,7 @@ pub fn backspace() {
 }
 
 /// Scroll the display up (show older content)
+#[allow(dead_code)]
 pub fn scroll_display_up(lines: usize) {
     let mut sb = SCROLLBACK.lock();
     sb.scroll_up(lines);
@@ -369,6 +373,7 @@ pub fn scroll_display_up(lines: usize) {
 }
 
 /// Scroll the display down (show newer content)
+#[allow(dead_code)]
 pub fn scroll_display_down(lines: usize) {
     let mut sb = SCROLLBACK.lock();
     sb.scroll_down(lines);
@@ -384,6 +389,7 @@ pub fn scroll_display_down(lines: usize) {
 }
 
 /// Redraw screen from scrollback buffer
+#[allow(dead_code)]
 fn redraw_from_scrollback(sb: &ScrollbackBuffer) {
     if sb.scroll_offset == 0 {
         return; // Live view, no need to redraw
