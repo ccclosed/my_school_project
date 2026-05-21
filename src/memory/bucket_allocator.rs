@@ -166,10 +166,16 @@ impl BucketAllocator {
         let align = layout.align().max(8);
 
         // Try bucket allocator for small sizes
+        // But only if the bucket size satisfies the alignment requirement
         if let Some(idx) = self.bucket_index(size) {
-            if let Some(ptr) = self.buckets[idx].alloc() {
-                self.used += self.buckets[idx].block_size;
-                return Some(ptr);
+            let bucket_size = self.buckets[idx].block_size;
+            // Bucket allocations are naturally aligned to their size (power of 2)
+            // Only use bucket if alignment requirement is satisfied
+            if bucket_size >= align {
+                if let Some(ptr) = self.buckets[idx].alloc() {
+                    self.used += bucket_size;
+                    return Some(ptr);
+                }
             }
         }
 
