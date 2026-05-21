@@ -55,6 +55,12 @@ pub unsafe fn io_base() -> u16 {
     IO_BASE.load(Ordering::Relaxed)
 }
 
+/// Return the physical address of a buffer reference.
+/// The kernel uses identity mapping (virtual == physical), so the pointer IS the physical address.
+fn phys_addr_of<T>(buf: &T) -> u32 {
+    (buf as *const T) as u32
+}
+
 /// Reset the chip, read MAC, set up RX/TX. Returns the MAC address.
 pub fn init(io_base: u16) -> [u8; 6] {
     IO_BASE.store(io_base, Ordering::Release);
@@ -83,8 +89,8 @@ pub fn init(io_base: u16) -> [u8; 6] {
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
         );
 
-        // Point RBSTART to the RX ring buffer
-        let rx_addr = &*RX_BUF.lock() as *const RxBuf as u32;
+        // Point RBSTART to the RX ring buffer (physical address)
+        let rx_addr = phys_addr_of(&*RX_BUF.lock());
         outl(io_base + RBSTART, rx_addr);
 
         // Unmask RX OK (bit 0) and TX OK (bit 2) interrupts
@@ -162,7 +168,8 @@ pub fn send(frame: &[u8]) -> Result<(), ()> {
         outb(io + TPOLL, 0x40);
 
         // Poll for TOK (bit 15) or TX Error Summary (bit 22)
-        let mut timeout = 1_000_000;
+        // using timer-based timeout instead of an iteration counter.
+        let deadline = crate::timer::millis() + 100; // 100 ms timeout
         loop {
             let status = inl(io + tsd);
             if status & 0x8000 != 0 {
@@ -173,8 +180,7 @@ pub fn send(frame: &[u8]) -> Result<(), ()> {
                 error!("RTL8139 TX error: status=0x{:08x}", status);
                 return Err(());
             }
-            timeout -= 1;
-            if timeout == 0 {
+            if crate::timer::millis() >= deadline {
                 warn!("RTL8139 TX timeout, status=0x{:08x} (desc={})", status, desc);
                 return Err(());
             }
@@ -186,8 +192,8 @@ pub fn send(frame: &[u8]) -> Result<(), ()> {
 }
 
 /// Volatile-read a u16 from an RX buffer pointer (NIC writes asynchronously).
-unsafe fn rx_volatile_u16(ptr: *const u8) -> u16 {
-    if ptr.is_null() {
+unsafe fn rx_volatile_u16(ptr: *const u8, buf_start: *const u8, buf_end: *const u8) -> u16 {
+    if ptr.is_null() || ptr < buf_start || ptr.add(1) >= buf_end {
         return 0;
     }
     let lo = core::ptr::read_volatile(ptr);
@@ -217,8 +223,9 @@ pub fn poll_rx() -> Option<alloc::vec::Vec<u8>> {
         core::sync::atomic::fence(Ordering::SeqCst);
 
         // Volatile-read header from the RX ring (written by NIC async)
-        let status = rx_volatile_u16(rx_ptr.add(capr));
-        let pkt_size = rx_volatile_u16(rx_ptr.add(capr + 2)) as usize;
+        let buf_end = rx_ptr.add(RX_BUF_SIZE);
+        let status = rx_volatile_u16(rx_ptr.add(capr), rx_ptr, buf_end);
+        let pkt_size = rx_volatile_u16(rx_ptr.add(capr + 2), rx_ptr, buf_end) as usize;
 
         if pkt_size < 4 || pkt_size > 1518 + 4 {
             warn!("RTL8139 bad pkt: status=0x{:04x} size={}", status, pkt_size);

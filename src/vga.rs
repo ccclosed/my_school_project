@@ -120,14 +120,15 @@ impl Writer {
     }
 
     fn scroll(&mut self) {
-        // Save the top line to scrollback before scrolling
+        // Save the top line to deferred scrollback — SCROLLBACK.lock()
+        // must not be acquired inside WRITER.lock() to avoid deadlocks.
         let mut line_data = [0u8; WIDTH * 2];
         unsafe {
             for i in 0..WIDTH * 2 {
                 line_data[i] = core::ptr::read_volatile(BUFFER.add(i));
             }
         }
-        SCROLLBACK.lock().add_line(&line_data);
+        *DEFERRED_SCROLL_LINE.lock() = Some(line_data);
 
         unsafe {
             core::ptr::copy_nonoverlapping(
@@ -197,6 +198,16 @@ impl Writer {
     }
 }
 
+// Deferred scrollback line: scroll() saves here while WRITER is locked;
+// commit after releasing WRITER to avoid SCROLLBACK.lock() inside WRITER.lock().
+static DEFERRED_SCROLL_LINE: Mutex<Option<[u8; WIDTH * 2]>> = Mutex::new(None);
+
+fn commit_scrollback() {
+    if let Some(line) = DEFERRED_SCROLL_LINE.lock().take() {
+        SCROLLBACK.lock().add_line(&line);
+    }
+}
+
 lazy_static! {
     static ref WRITER: Mutex<Writer> = Mutex::new(Writer::new());
 }
@@ -230,6 +241,7 @@ pub fn init() {
 pub fn write_fmt(args: core::fmt::Arguments) {
     use core::fmt::Write;
     let _ = WRITER.lock().write_fmt(args);
+    commit_scrollback();
 }
 
 impl fmt::Write for Writer {
@@ -258,10 +270,12 @@ macro_rules! println {
 
 pub fn clear_screen() {
     WRITER.lock().clear();
+    commit_scrollback();
 }
 
 pub fn set_color(fg: Color, bg: Color) {
     WRITER.lock().set_color(fg, bg);
+    commit_scrollback();
 }
 
 pub fn set_cursor(row: usize, col: usize) {
@@ -269,6 +283,8 @@ pub fn set_cursor(row: usize, col: usize) {
     w.row = row.min(CONTENT_ROWS - 1);
     w.col = col.min(WIDTH - 1);
     update_hardware_cursor(w.row, w.col);
+    drop(w);
+    commit_scrollback();
 }
 
 #[allow(dead_code)]
@@ -285,6 +301,8 @@ pub fn write_at(row: usize, col: usize, s: &str) {
             w.write_at(row, col + i, b, w.color);
         }
     }
+    drop(w);
+    commit_scrollback();
 }
 
 pub fn clear_line(row: usize) {
@@ -293,6 +311,8 @@ pub fn clear_line(row: usize) {
     for col in 0..WIDTH {
         w.write_at(row, col, b' ', w.color);
     }
+    drop(w);
+    commit_scrollback();
 }
 
 pub fn status_line(text: &str) {
@@ -313,6 +333,8 @@ pub fn status_line(text: &str) {
         }
     }
     w.color = color;
+    drop(w);
+    commit_scrollback();
 }
 
 pub fn backspace() {
@@ -326,6 +348,8 @@ pub fn backspace() {
         w.write_at(w.row, w.col, b' ', w.color);
     }
     update_hardware_cursor(w.row, w.col);
+    drop(w);
+    commit_scrollback();
 }
 
 /// Scroll the display up (show older content)
@@ -369,4 +393,11 @@ fn redraw_from_scrollback(sb: &ScrollbackBuffer) {
             }
         }
     }
+
+    // Reset WRITER's cursor position and update hardware cursor
+    let mut w = WRITER.lock();
+    w.row = 0;
+    w.col = 0;
+    write_crtc(0x0E, 0);
+    write_crtc(0x0F, 0);
 }

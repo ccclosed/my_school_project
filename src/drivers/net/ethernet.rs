@@ -12,7 +12,7 @@ pub struct EthernetFrame<'a> {
 
 impl<'a> EthernetFrame<'a> {
     pub fn parse(data: &'a [u8]) -> Option<Self> {
-        if data.len() < 14 {
+        if data.len() < 60 {
             return None;
         }
         let mut dst = [0u8; 6];

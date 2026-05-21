@@ -115,12 +115,16 @@ isr8:
     iretd
 
 irq0:
+    push fs
+    push gs
     pushad
     push esp             // pass pointer to pushad frame as argument
     call timer_handler   // returns new stack pointer in eax
     add esp, 4           // clean up argument
     mov esp, eax         // switch to next task's stack
     popad
+    pop gs
+    pop fs
     iretd
 
 irq1:

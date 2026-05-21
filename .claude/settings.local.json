@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check *)",
+      "Bash(cargo build *)",
+      "Bash(rustc --edition 2021 -Zbuild-std=core,alloc --target i686-unknown-none.json --crate-type lib src/memory/bucket_allocator.rs)"
+    ]
+  }
+}

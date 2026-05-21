@@ -1,4 +1,3 @@
-pub mod allocator;
 pub mod bucket_allocator;
 pub mod paging;
 

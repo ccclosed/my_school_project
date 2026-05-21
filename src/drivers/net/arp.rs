@@ -44,6 +44,11 @@ impl ArpPacket {
         }
         let hw_type = u16::from_be_bytes([data[0], data[1]]);
         let proto_type = u16::from_be_bytes([data[2], data[3]]);
+        let hlen = data[4];
+        let plen = data[5];
+        if hw_type != 1 || proto_type != 0x0800 || hlen != 6 || plen != 4 {
+            return None;
+        }
         let opcode = u16::from_be_bytes([data[6], data[7]]);
         let mut sender_mac = [0u8; 6];
         let mut sender_ip = [0u8; 4];

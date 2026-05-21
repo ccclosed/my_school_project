@@ -69,6 +69,14 @@ impl Bucket {
     /// Free a block back to this bucket
     unsafe fn dealloc(&mut self, ptr: NonNull<u8>) {
         let node = ptr.cast::<FreeNode>().as_ptr();
+        // Double-free detection: walk the free list and check if this block is already there
+        let mut curr = self.free_list;
+        while let Some(n) = curr {
+            if n.as_ptr() == node {
+                return;
+            }
+            curr = n.as_ref().next;
+        }
         (*node).next = self.free_list;
         self.free_list = NonNull::new(node);
         self.free_blocks += 1;
@@ -216,7 +224,6 @@ impl BucketAllocator {
 
     pub unsafe fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
         let size = layout.size().max(8);
-        let addr = ptr.as_ptr() as usize;
 
         // Check if it's from a bucket
         if let Some(idx) = self.bucket_index(size) {

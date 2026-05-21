@@ -74,7 +74,7 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
     let h = crate::memory::heap_stats();
     println!("ALLOC FAILED: size={} align={} heap: {}/{}",
         layout.size(), layout.align(), h.0, crate::memory::HEAP_SIZE);
-    crate::memory::allocator::dump_free_list();
+    crate::memory::bucket_allocator::dump_stats();
     arch::print_stack_trace();
 
     panic_banner();
