@@ -43,7 +43,7 @@ pub struct PciDevice {
     pub subclass: u8,
 }
 
-fn read_device(bus: u8, slot: u8, func: u8) -> Option<PciDevice> {
+pub fn probe_device(bus: u8, slot: u8, func: u8) -> Option<PciDevice> {
     let dword = read_config_dword(bus, slot, func, 0);
     let vendor = (dword & 0xFFFF) as u16;
     if vendor == 0xFFFF {
@@ -62,6 +62,10 @@ fn read_device(bus: u8, slot: u8, func: u8) -> Option<PciDevice> {
         class,
         subclass,
     })
+}
+
+fn read_device(bus: u8, slot: u8, func: u8) -> Option<PciDevice> {
+    probe_device(bus, slot, func)
 }
 
 /// Scan bus 0 and return all found devices.

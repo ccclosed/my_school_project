@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use crate::cpu;
 use crate::drivers::net::{self, NicKind};
-use crate::drivers::net::{arp, ethernet};
+use crate::drivers::net::{arp, ethernet, ipv4};
 use crate::fs::ramfs;
 use crate::keyboard;
 use crate::keyboard::KeyEvent;
@@ -211,10 +211,31 @@ fn dispatch(line: &str) {
                 println!("usage: rm <file>");
             }
         }
+        "cp" => {
+            let src = parts.next();
+            let dst = parts.next();
+            if let (Some(src), Some(dst)) = (src, dst) {
+                cmd_cp(src, dst);
+            } else {
+                println!("usage: cp <source> <dest>");
+            }
+        }
+        "mv" => {
+            let src = parts.next();
+            let dst = parts.next();
+            if let (Some(src), Some(dst)) = (src, dst) {
+                cmd_mv(src, dst);
+            } else {
+                println!("usage: mv <source> <dest>");
+            }
+        }
         "mem" => {
             let verbose = parts.next() == Some("-v");
             cmd_mem(verbose);
         }
+        "free" => cmd_free(),
+        "lspci" => cmd_lspci(),
+        "ifconfig" => cmd_ifconfig(),
         "cpuinfo" => cmd_cpuinfo(),
         "netinfo" => cmd_netinfo(),
         "calc" => {
@@ -258,6 +279,13 @@ fn dispatch(line: &str) {
         "uptime" => cmd_uptime(),
         "dhcp" => cmd_dhcp(),
         "env" => cmd_env(),
+        "ping" => {
+            if let Some(target) = parts.next() {
+                cmd_ping(target);
+            } else {
+                println!("usage: ping <ip>");
+            }
+        }
         _ => println!("unknown command: {}", cmd),
     }
 }
@@ -269,9 +297,14 @@ fn cmd_help() {
     println!("write <f> \"txt\"   - write file");
     println!("cat <file>        - print file");
     println!("rm <file>         - delete file");
+    println!("cp <src> <dst>    - copy file");
+    println!("mv <src> <dst>    - move/rename file");
     println!("mem               - heap usage");
+    println!("free              - memory statistics");
+    println!("lspci             - list PCI devices");
     println!("cpuinfo           - CPU vendor");
     println!("netinfo           - NIC status");
+    println!("ifconfig          - network configuration");
     println!("calc <expr>       - integer math");
     println!("clear             - clear screen");
     println!("edit <file>       - TUI editor (Esc=exit, Ctrl+S=save)");
@@ -281,6 +314,7 @@ fn cmd_help() {
     println!("uptime            - system uptime");
     println!("env               - system info");
     println!("dhcp              - request IP via DHCP");
+    println!("ping <ip>         - send ICMP echo (e.g. ping 10.0.2.2)");
 }
 
 fn cmd_ls() {
@@ -383,6 +417,19 @@ fn cmd_mem(verbose: bool) {
     if verbose {
         memory::bucket_allocator::dump_stats();
     }
+}
+
+fn cmd_free() {
+    let (used, free) = memory::heap_stats();
+    let total = memory::HEAP_SIZE;
+    let (page_total, page_free, page_used) = memory::paging::stats();
+    
+    println!("              total        used        free     percent");
+    println!("Heap:    {:10} {:10} {:10}      {:3}%", 
+        total, used, free, (used * 100) / total);
+    println!("Pages:   {:10} {:10} {:10}      {:3}%",
+        page_total * 4096, page_used * 4096, page_free * 4096, 
+        (page_used * 100) / page_total);
 }
 
 fn cmd_cpuinfo() {
@@ -626,6 +673,77 @@ fn cmd_dhcp() {
     }
 }
 
+fn cmd_lspci() {
+    use crate::drivers::pci;
+    println!("Bus Dev Fn Vendor Device Class");
+    for bus in 0..256 {
+        for slot in 0..32 {
+            if let Some(dev) = pci::probe_device(bus as u8, slot as u8, 0) {
+                println!("{:02x}  {:02x}  0  {:04x}   {:04x}   {:02x}:{:02x}",
+                    dev.bus, dev.slot, dev.vendor_id, dev.device_id, dev.class, dev.subclass);
+            }
+        }
+    }
+}
+
+fn cmd_ifconfig() {
+    let s = net::status();
+    let kind = match s.kind {
+        NicKind::None => "none",
+        NicKind::E1000 => "e1000",
+        NicKind::Rtl8139 => "rtl8139",
+    };
+    
+    println!("eth0: {} ({})", kind, if s.link_up { "UP" } else { "DOWN" });
+    println!("      mac: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        s.mac[0], s.mac[1], s.mac[2], s.mac[3], s.mac[4], s.mac[5]);
+    
+    if let Some(cfg) = net::get_config() {
+        println!("      inet: {}.{}.{}.{}", cfg.ip[0], cfg.ip[1], cfg.ip[2], cfg.ip[3]);
+        println!("      mask: {}.{}.{}.{}", cfg.subnet[0], cfg.subnet[1], cfg.subnet[2], cfg.subnet[3]);
+        println!("      gateway: {}.{}.{}.{}", cfg.gateway[0], cfg.gateway[1], cfg.gateway[2], cfg.gateway[3]);
+    } else {
+        println!("      inet: not configured");
+    }
+}
+
+fn cmd_cp(src: &str, dst: &str) {
+    if !is_valid_filename(src) || !is_valid_filename(dst) {
+        println!("cp: invalid filename");
+        return;
+    }
+    match ramfs::read(src) {
+        Ok(data) => {
+            match ramfs::write(dst, &data) {
+                Ok(()) => println!("copied {} to {} ({} bytes)", src, dst, data.len()),
+                Err(e) => println!("cp: {}", e),
+            }
+        }
+        Err(e) => println!("cp: {}", e),
+    }
+}
+
+fn cmd_mv(src: &str, dst: &str) {
+    if !is_valid_filename(src) || !is_valid_filename(dst) {
+        println!("mv: invalid filename");
+        return;
+    }
+    match ramfs::read(src) {
+        Ok(data) => {
+            match ramfs::write(dst, &data) {
+                Ok(()) => {
+                    match ramfs::delete(src) {
+                        Ok(()) => println!("moved {} to {}", src, dst),
+                        Err(e) => println!("mv: failed to delete source: {}", e),
+                    }
+                }
+                Err(e) => println!("mv: {}", e),
+            }
+        }
+        Err(e) => println!("mv: {}", e),
+    }
+}
+
 fn cmd_env() {
     // Heap
     let (used, free) = crate::memory::heap_stats();
@@ -661,6 +779,16 @@ fn cmd_netinfo() {
         s.mac[0], s.mac[1], s.mac[2], s.mac[3], s.mac[4], s.mac[5]
     );
     println!("link: {}", if s.link_up { "up" } else { "down" });
+    
+    // Show configured IP
+    if let Some(cfg) = net::get_config() {
+        println!("ip: {}.{}.{}.{}", cfg.ip[0], cfg.ip[1], cfg.ip[2], cfg.ip[3]);
+        println!("gateway: {}.{}.{}.{}", cfg.gateway[0], cfg.gateway[1], cfg.gateway[2], cfg.gateway[3]);
+        println!("dns: {}.{}.{}.{}", cfg.dns[0], cfg.dns[1], cfg.dns[2], cfg.dns[3]);
+    } else {
+        println!("ip: not configured (run 'dhcp')");
+    }
+    
     if s.kind == NicKind::Rtl8139 {
         let (capr, cbr) = net::rx_ring_pos();
         println!("rx ring: CAPR={} CBR={}", capr, cbr);
@@ -672,3 +800,165 @@ fn cmd_netinfo() {
         );
     }
 }
+
+fn parse_ip(s: &str) -> Option<[u8; 4]> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut ip = [0u8; 4];
+    for (i, part) in parts.iter().enumerate() {
+        ip[i] = part.parse().ok()?;
+    }
+    Some(ip)
+}
+
+fn cmd_ping(target: &str) {
+    let status = net::status();
+    if status.kind == NicKind::None {
+        println!("No NIC available");
+        return;
+    }
+    
+    let Some(target_ip) = parse_ip(target) else {
+        println!("Invalid IP address format (use x.x.x.x)");
+        return;
+    };
+    
+    let Some(cfg) = net::get_config() else {
+        println!("Network not configured. Run 'dhcp' first.");
+        return;
+    };
+    
+    println!("PING {}.{}.{}.{} from {}.{}.{}.{}",
+        target_ip[0], target_ip[1], target_ip[2], target_ip[3],
+        cfg.ip[0], cfg.ip[1], cfg.ip[2], cfg.ip[3]);
+    
+    // Build ICMP Echo Request
+    let mut icmp_buf = [0u8; 64];
+    icmp_buf[0] = 8;  // Type: Echo Request
+    icmp_buf[1] = 0;  // Code: 0
+    // Checksum at [2..4] - will calculate
+    icmp_buf[4] = 0;  // Identifier (high)
+    icmp_buf[5] = 1;  // Identifier (low)
+    icmp_buf[6] = 0;  // Sequence (high)
+    icmp_buf[7] = 1;  // Sequence (low)
+    
+    // Payload: "RustKernel"
+    let payload = b"RustKernel";
+    icmp_buf[8..8+payload.len()].copy_from_slice(payload);
+    let icmp_len = 8 + payload.len();
+    
+    // Calculate ICMP checksum
+    let mut sum: u32 = 0;
+    for i in (0..icmp_len).step_by(2) {
+        if i + 1 < icmp_len {
+            sum += u16::from_be_bytes([icmp_buf[i], icmp_buf[i+1]]) as u32;
+        } else {
+            sum += (icmp_buf[i] as u32) << 8;
+        }
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    let checksum = !(sum as u16);
+    icmp_buf[2..4].copy_from_slice(&checksum.to_be_bytes());
+    
+    // Build IP packet
+    let mut ip_buf = [0u8; 84];
+    let ip_len = ipv4::Ipv4Packet::build(cfg.ip, target_ip, 1, icmp_len as u16, &mut ip_buf)
+        .expect("IP buffer too small");
+    ip_buf[ip_len..ip_len+icmp_len].copy_from_slice(&icmp_buf[..icmp_len]);
+    
+    // Need to resolve target MAC via ARP first
+    println!("Resolving MAC address...");
+    let target_mac = resolve_mac(target_ip, &cfg, &status.mac);
+    let Some(target_mac) = target_mac else {
+        println!("ARP resolution failed");
+        return;
+    };
+    
+    // Build Ethernet frame
+    let mut eth_buf = [0u8; 98];
+    let eth_len = ethernet::EthernetFrame::build(
+        target_mac, status.mac, 0x0800, &ip_buf[..ip_len+icmp_len], &mut eth_buf
+    ).expect("Ethernet buffer too small");
+    
+    // Send ping
+    let start = crate::timer::millis();
+    match net::send(&eth_buf[..eth_len]) {
+        Ok(()) => println!("Sent {} bytes", icmp_len),
+        Err(()) => {
+            println!("TX failed");
+            return;
+        }
+    }
+    
+    // Wait for reply
+    let deadline = crate::timer::millis() + 5000;
+    while crate::timer::millis() < deadline {
+        if let Some(pkt) = net::poll_rx() {
+            if let Some(eth) = ethernet::EthernetFrame::parse(&pkt) {
+                if eth.ethertype == 0x0800 {
+                    if let Some(ip) = ipv4::Ipv4Packet::parse(eth.payload) {
+                        if ip.protocol == 1 && ip.payload.len() >= 8 {
+                            let icmp_type = ip.payload[0];
+                            if icmp_type == 0 {  // Echo Reply
+                                let elapsed = crate::timer::millis() - start;
+                                println!("Reply from {}.{}.{}.{}: time={}ms",
+                                    ip.src[0], ip.src[1], ip.src[2], ip.src[3], elapsed);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check for Ctrl+C
+        if keyboard::pop_event() == Some(keyboard::KeyEvent::Ctrl('c')) {
+            println!("Aborted");
+            return;
+        }
+        
+        crate::arch::hlt();
+    }
+    
+    println!("Request timeout");
+}
+
+fn resolve_mac(target_ip: [u8; 4], cfg: &net::NetConfig, our_mac: &[u8; 6]) -> Option<[u8; 6]> {
+    // Build ARP request
+    let mut arp_buf = [0u8; 28];
+    let arp_len = arp::ArpPacket::build_request(*our_mac, cfg.ip, target_ip, &mut arp_buf)?;
+    
+    // Build Ethernet frame
+    let broadcast = [0xFF; 6];
+    let mut eth_buf = [0u8; 42];
+    let eth_len = ethernet::EthernetFrame::build(
+        broadcast, *our_mac, 0x0806, &arp_buf[..arp_len], &mut eth_buf
+    )?;
+    
+    // Send ARP request
+    net::send(&eth_buf[..eth_len]).ok()?;
+    
+    // Wait for reply
+    let deadline = crate::timer::millis() + 2000;
+    while crate::timer::millis() < deadline {
+        if let Some(pkt) = net::poll_rx() {
+            if let Some(eth) = ethernet::EthernetFrame::parse(&pkt) {
+                if eth.ethertype == 0x0806 {
+                    if let Some(arp_pkt) = arp::ArpPacket::parse(eth.payload) {
+                        if arp_pkt.opcode == 2 && arp_pkt.sender_ip == target_ip {
+                            return Some(arp_pkt.sender_mac);
+                        }
+                    }
+                }
+            }
+        }
+        crate::arch::hlt();
+    }
+    
+    None
+}
+
