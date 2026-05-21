@@ -40,7 +40,8 @@ static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init() {
     unsafe {
-        TASKS[0].state = TaskState::Running;
+        // Task 0 starts as Ready (will become Running on first schedule)
+        TASKS[0].state = TaskState::Ready;
     }
     info!("Scheduler: idle=0, {} slots free", MAX_TASKS - 1);
 }

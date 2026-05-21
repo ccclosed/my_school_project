@@ -188,10 +188,8 @@ fn translate(sc: u8) -> Option<KeyEvent> {
         0x0E => Some(KeyEvent::Backspace),
         0x1C => Some(KeyEvent::Enter),
         0x01 => Some(KeyEvent::Escape),
-        0x48 => Some(KeyEvent::Up),
-        0x50 => Some(KeyEvent::Down),
-        0x4B => Some(KeyEvent::Left),
-        0x4D => Some(KeyEvent::Right),
+        // Arrow keys are handled by translate_extended (0xE0 prefix)
+        // Remove duplicate handling here
         _ => {
             let shift = SHIFT.load(Ordering::Relaxed);
             let ctrl = CTRL.load(Ordering::Relaxed);

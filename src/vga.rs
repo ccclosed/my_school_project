@@ -120,16 +120,15 @@ impl Writer {
     }
 
     fn scroll(&mut self) {
-        // Save the top line to deferred scrollback — SCROLLBACK.lock()
-        // must not be acquired inside WRITER.lock() to avoid deadlocks.
+        // Save the top line BEFORE scrolling (this line will be lost after copy)
         let mut line_data = [0u8; WIDTH * 2];
         unsafe {
             for i in 0..WIDTH * 2 {
                 line_data[i] = core::ptr::read_volatile(BUFFER.add(i));
             }
         }
-        *DEFERRED_SCROLL_LINE.lock() = Some(line_data);
 
+        // Now scroll all lines up
         unsafe {
             core::ptr::copy_nonoverlapping(
                 BUFFER.add(WIDTH * 2),
@@ -137,6 +136,10 @@ impl Writer {
                 (CONTENT_ROWS - 1) * WIDTH * 2,
             );
         }
+        
+        // Save the line that just scrolled off to deferred scrollback
+        *DEFERRED_SCROLL_LINE.lock() = Some(line_data);
+        
         let blank = ColorCode::new(Color::LightGray, Color::Black);
         for col in 0..WIDTH {
             self.write_at(CONTENT_ROWS - 1, col, b' ', blank);

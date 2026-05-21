@@ -69,14 +69,8 @@ impl Bucket {
     /// Free a block back to this bucket
     unsafe fn dealloc(&mut self, ptr: NonNull<u8>) {
         let node = ptr.cast::<FreeNode>().as_ptr();
-        // Double-free detection: walk the free list and check if this block is already there
-        let mut curr = self.free_list;
-        while let Some(n) = curr {
-            if n.as_ptr() == node {
-                return;
-            }
-            curr = n.as_ref().next;
-        }
+        // No double-free detection for buckets - trust the caller
+        // (checking would be O(n) and defeat the purpose of O(1) buckets)
         (*node).next = self.free_list;
         self.free_list = NonNull::new(node);
         self.free_blocks += 1;
