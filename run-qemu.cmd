@@ -5,14 +5,14 @@ if "%1"=="-iso" goto :iso
 if "%1"=="--iso" goto :iso
 
 :elf
-set ELF=target\i686-unknown-none\release\rust-kernel
+set ELF=target\x86_64-unknown-none\release\rust-kernel
 if not exist "%ELF%" (
     echo Building kernel...
     cargo build --release
     if errorlevel 1 exit /b 1
 )
-echo Starting QEMU (ELF -kernel mode)...
-qemu-system-i386 -machine pc -kernel "%ELF%" -m 128M -no-reboot -net nic,model=rtl8139 -net user -serial file:kernel.log
+echo Starting QEMU (Multiboot2 -kernel mode)...
+qemu-system-x86_64 -machine q35 -kernel "%ELF%" -m 256M -no-reboot -net nic,model=rtl8139 -net user -serial file:kernel.log -cpu qemu64 -display gtk
 goto :end
 
 :iso
@@ -22,6 +22,7 @@ if not exist "%ISO%" (
     exit /b 1
 )
 echo Starting QEMU (ISO -cdrom mode)...
-qemu-system-i386 -machine pc -cdrom "%ISO%" -m 128M -no-reboot -net nic,model=rtl8139 -net user -serial file:kernel.log
+qemu-system-x86_64 -machine q35 -cdrom "%ISO%" -m 256M -no-reboot -net nic,model=rtl8139 -net user -serial file:kernel.log -cpu qemu64 -display gtk
 
 :end
+

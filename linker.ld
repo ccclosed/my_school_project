@@ -4,8 +4,12 @@ SECTIONS
 {
     . = 1M;
 
-    .multiboot : ALIGN(4) {
-        KEEP(*(.multiboot_header))
+    .multiboot2_header : ALIGN(8) {
+        KEEP(*(.multiboot2_header))
+    }
+
+    .boot : ALIGN(4K) {
+        KEEP(*(.boot))
     }
 
     .text : ALIGN(4K) {
@@ -26,9 +30,6 @@ SECTIONS
         *(COMMON)
         PROVIDE(__bss_end = .);
     }
-
-    PROVIDE(__stack_bottom = ADDR(.bss) + SIZEOF(.bss));
-    PROVIDE(__stack_top = __stack_bottom + 64K);
 
     /DISCARD/ : {
         *(.eh_frame*)

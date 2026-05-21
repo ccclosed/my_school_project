@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
-$elf = "$root\target\i686-unknown-none\release\rust-kernel"
+$elf = "$root\target\x86_64-unknown-none\release\rust-kernel"
 if (-not (Test-Path $elf)) {
     Set-Location $root; cargo build --release
     if (-not (Test-Path $elf)) { throw "Build failed" }
@@ -29,4 +29,4 @@ if ($LASTEXITCODE -ne 0) { throw "grub-mkrescue failed" }
 
 Write-Host ""
 Write-Host "ISO: $root\target\rust-kernel.iso ($((Get-Item "$root\target\rust-kernel.iso").Length / 1KB) KB)"
-Write-Host "Run: qemu-system-i386 -cdrom '$root\target\rust-kernel.iso' -m 128M -serial file:kernel.log"
+Write-Host "Run: qemu-system-x86_64 -cdrom '$root\target\rust-kernel.iso' -m 256M -serial file:kernel.log"

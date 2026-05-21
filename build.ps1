@@ -37,4 +37,5 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "OK -> target\i686-unknown-none\release\rust-kernel"
+Write-Host "OK -> target\x86_64-unknown-none\release\rust-kernel"
+
