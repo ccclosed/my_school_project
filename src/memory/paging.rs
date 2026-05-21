@@ -1,13 +1,13 @@
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const PHYS_BASE: usize = 0x0040_0000;
-const PHYS_END: usize = 0x0400_0000;
+const PHYS_END: usize = 0x4000_0000; // 1GB
 const PAGE_SIZE: usize = 4096;
 const FRAME_COUNT: usize = (PHYS_END - PHYS_BASE) / PAGE_SIZE;
 
-const BITMAP_WORDS: usize = (FRAME_COUNT + 31) / 32;
-static BITMAP: [AtomicU32; BITMAP_WORDS] =
-    unsafe { core::mem::transmute([0u32; BITMAP_WORDS]) };
+const BITMAP_WORDS: usize = (FRAME_COUNT + 63) / 64;
+static BITMAP: [AtomicU64; BITMAP_WORDS] =
+    unsafe { core::mem::transmute([0u64; BITMAP_WORDS]) };
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 fn page_index(phys: usize) -> Option<usize> {
@@ -21,8 +21,8 @@ fn set_bit(idx: usize, free: bool) {
     if idx >= FRAME_COUNT {
         return;
     }
-    let word = idx / 32;
-    let bit = idx % 32;
+    let word = idx / 64;
+    let bit = idx % 64;
     if word >= BITMAP_WORDS {
         return;
     }
@@ -37,8 +37,8 @@ fn test_bit(idx: usize) -> bool {
     if idx >= FRAME_COUNT {
         return false;
     }
-    let word = idx / 32;
-    let bit = idx % 32;
+    let word = idx / 64;
+    let bit = idx % 64;
     if word >= BITMAP_WORDS {
         return false;
     }
@@ -47,9 +47,9 @@ fn test_bit(idx: usize) -> bool {
 
 pub fn init() {
     for w in 0..BITMAP_WORDS {
-        BITMAP[w].store(0xFFFF_FFFF, Ordering::Relaxed);
+        BITMAP[w].store(0xFFFF_FFFF_FFFF_FFFF, Ordering::Relaxed);
     }
-    let remainder = FRAME_COUNT % 32;
+    let remainder = FRAME_COUNT % 64;
     if remainder > 0 && BITMAP_WORDS > 0 {
         BITMAP[BITMAP_WORDS - 1]
             .fetch_and((1 << remainder) - 1, Ordering::Relaxed);
@@ -86,9 +86,9 @@ pub fn alloc_frame() -> usize {
         return 0;
     }
     for i in 0..FRAME_COUNT {
-        let word = i / 32;
-        let bit = i % 32;
-        let mask = 1u32 << bit;
+        let word = i / 64;
+        let bit = i % 64;
+        let mask = 1u64 << bit;
         let prev = BITMAP[word].fetch_and(!mask, Ordering::AcqRel);
         if prev & mask != 0 {
             return PHYS_BASE + i * PAGE_SIZE;
@@ -117,58 +117,10 @@ pub fn stats() -> (usize, usize, usize) {
     (FRAME_COUNT, free, FRAME_COUNT - free)
 }
 
-/// Enable 32-bit paging with identity mapping for 0 .. PHYS_END.
-/// Allocates page directory + page tables from the frame allocator.
-/// Call once, after init(). Disables interrupts during the transition.
+/// Enable 64-bit paging (already enabled by bootloader, this is a no-op for now).
+/// In x86_64, paging is enabled during the transition to long mode in asm.rs.
+/// This function exists for API compatibility but doesn't need to do anything.
 pub fn enable() {
-    use crate::arch;
-
-    const ENTRIES: usize = 1024;
-    const PTE_P: u32 = 1;
-    const PTE_W: u32 = 2;
-    const PD_SIZE: usize = PHYS_END / (ENTRIES * PAGE_SIZE);
-
-    let pd_phys = alloc_frame();
-    if pd_phys == 0 {
-        panic!("enable_paging: no frame for page directory");
-    }
-
-    arch::disable_interrupts();
-
-    unsafe {
-        let pd = pd_phys as *mut [u32; ENTRIES];
-        core::ptr::write_volatile(pd, [0u32; ENTRIES]);
-
-        for i in 0..PD_SIZE {
-            let pt_phys = alloc_frame();
-            if pt_phys == 0 {
-                panic!("enable_paging: no frame for page table {}", i);
-            }
-            let pt = pt_phys as *mut [u32; ENTRIES];
-            core::ptr::write_volatile(pt, [0u32; ENTRIES]);
-
-            // Identity map: virtual addr == physical addr
-            for j in 0..ENTRIES {
-                let vaddr = (i * ENTRIES + j) * PAGE_SIZE;
-                (*pt)[j] = vaddr as u32 | PTE_P | PTE_W;
-            }
-
-            (*pd)[i] = pt_phys as u32 | PTE_P | PTE_W;
-        }
-    }
-
-    // Set CR3, enable PG bit
-    unsafe {
-        core::arch::asm!(
-            "mov cr3, {pd}",
-            "mov {tmp}, cr0",
-            "or {tmp}, 0x80000000",
-            "mov cr0, {tmp}",
-            pd = in(reg) pd_phys as u32,
-            tmp = out(reg) _,
-            options(nostack),
-        );
-    }
-
-    arch::enable_interrupts();
+    // Paging is already enabled by the bootloader in asm.rs
+    // We're using 2MB pages for the first 1GB (identity mapped)
 }

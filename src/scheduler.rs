@@ -1,4 +1,4 @@
-/// Simple round-robin multitasking scheduler for i686.
+/// Simple round-robin multitasking scheduler for x86_64.
 /// Timer IRQ triggers context switches between tasks.
 ///
 /// SAFETY: All non-IRQ access to TASKS is guarded by disabling interrupts.
@@ -7,7 +7,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::{arch, info, warn};
 
 const MAX_TASKS: usize = 8;
-const STACK_SIZE: u32 = 16384;
+const STACK_SIZE: u64 = 32768;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TaskState {
@@ -17,7 +17,7 @@ enum TaskState {
 }
 
 struct Task {
-    esp: u32,
+    rsp: u64,
     state: TaskState,
     stack: [u8; STACK_SIZE as usize],
 }
@@ -25,7 +25,7 @@ struct Task {
 impl Task {
     const fn new() -> Self {
         Self {
-            esp: 0,
+            rsp: 0,
             state: TaskState::Free,
             stack: [0; STACK_SIZE as usize],
         }
@@ -51,29 +51,44 @@ pub fn spawn(entry: fn()) -> i32 {
     let result = unsafe {
         for i in 1..MAX_TASKS {
             if TASKS[i].state == TaskState::Free {
-                let stack_bottom = TASKS[i].stack.as_ptr() as u32;
+                let stack_bottom = TASKS[i].stack.as_ptr() as u64;
                 let stack_top = stack_bottom + STACK_SIZE;
 
+                // Stack must be 16-byte aligned
                 debug_assert!(stack_top % 16 == 0, "Stack not 16-byte aligned");
 
-                let sp = stack_top as *mut u32;
+                let sp = stack_top as *mut u64;
 
-                sp.offset(-1).write(0x200u32);
-                sp.offset(-2).write(0x08u32);
-                sp.offset(-3).write(entry as u32);
-                sp.offset(-4).write(0u32);
-                sp.offset(-5).write(0u32);
-                sp.offset(-6).write(0u32);
-                sp.offset(-7).write(0u32);
-                sp.offset(-8).write(0u32);
-                sp.offset(-9).write(0u32);
-                sp.offset(-10).write(0u32);
-                sp.offset(-11).write(0u32);
+                // Setup initial stack frame for iretq
+                // After iretq, RSP will point to stack_top - 8 (misaligned for call)
+                // This is correct because the entry function will be "called" via iretq
+                sp.offset(-1).write(0x10u64);           // SS
+                sp.offset(-2).write(stack_top - 8);     // RSP (misaligned for call)
+                sp.offset(-3).write(0x200u64);          // RFLAGS (IF=1)
+                sp.offset(-4).write(0x08u64);           // CS
+                sp.offset(-5).write(entry as u64);      // RIP
+                
+                // Push general purpose registers (matching irq0 frame)
+                sp.offset(-6).write(0u64);   // RAX
+                sp.offset(-7).write(0u64);   // RBX
+                sp.offset(-8).write(0u64);   // RCX
+                sp.offset(-9).write(0u64);   // RDX
+                sp.offset(-10).write(0u64);  // RBP
+                sp.offset(-11).write(0u64);  // RSI
+                sp.offset(-12).write(0u64);  // RDI
+                sp.offset(-13).write(0u64);  // R8
+                sp.offset(-14).write(0u64);  // R9
+                sp.offset(-15).write(0u64);  // R10
+                sp.offset(-16).write(0u64);  // R11
+                sp.offset(-17).write(0u64);  // R12
+                sp.offset(-18).write(0u64);  // R13
+                sp.offset(-19).write(0u64);  // R14
+                sp.offset(-20).write(0u64);  // R15
 
-                TASKS[i].esp = sp.offset(-11) as u32;
+                TASKS[i].rsp = sp.offset(-20) as u64;
                 TASKS[i].state = TaskState::Ready;
                 arch::enable_interrupts();
-                info!("Task {} spawned, entry=0x{:08x}", i, entry as u32);
+                info!("Task {} spawned, entry=0x{:016x}", i, entry as u64);
                 return i as i32;
             }
         }
@@ -87,12 +102,12 @@ pub fn spawn(entry: fn()) -> i32 {
 }
 
 pub fn print_tasks() {
-    println!("Slot State      ESP");
+    println!("Slot State      RSP");
     arch::disable_interrupts();
     unsafe {
         for i in 0..MAX_TASKS {
             let state = TASKS[i].state;
-            let esp = TASKS[i].esp;
+            let rsp = TASKS[i].rsp;
             arch::enable_interrupts();
             
             if state != TaskState::Free {
@@ -101,7 +116,7 @@ pub fn print_tasks() {
                     TaskState::Ready => "Ready",
                     TaskState::Running => "Run",
                 };
-                println!("  {}  {:4}  0x{:08x}", i, s, esp);
+                println!("  {}  {:4}  0x{:016x}", i, s, rsp);
             }
             
             arch::disable_interrupts();
@@ -110,14 +125,14 @@ pub fn print_tasks() {
     arch::enable_interrupts();
 }
 
-/// Called from the timer IRQ handler with current ESP (after pushad in irq0).
+/// Called from the timer IRQ handler with current RSP (after push regs in irq0).
 /// Interrupts are already disabled by the CPU in IRQ context.
-pub fn schedule(current_esp: u32) -> u32 {
+pub fn schedule(current_rsp: u64) -> u64 {
     unsafe {
         let cur = CURRENT.load(Ordering::SeqCst);
 
         // Save current task state
-        TASKS[cur].esp = current_esp;
+        TASKS[cur].rsp = current_rsp;
         if TASKS[cur].state == TaskState::Running {
             TASKS[cur].state = TaskState::Ready;
         }
@@ -129,7 +144,7 @@ pub fn schedule(current_esp: u32) -> u32 {
             if TASKS[next].state == TaskState::Ready {
                 TASKS[next].state = TaskState::Running;
                 CURRENT.store(next, Ordering::SeqCst);
-                return TASKS[next].esp;
+                return TASKS[next].rsp;
             }
             next = (next + 1) % MAX_TASKS;
             tried += 1;
@@ -137,6 +152,6 @@ pub fn schedule(current_esp: u32) -> u32 {
 
         // No ready task found, stay on current
         TASKS[cur].state = TaskState::Running;
-        current_esp
+        current_rsp
     }
 }

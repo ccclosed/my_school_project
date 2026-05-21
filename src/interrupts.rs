@@ -38,9 +38,11 @@ fn eoi(irq: u8) {
 #[allow(dead_code)]
 #[repr(C)]
 struct ExceptionFrame {
-    eip: u32,
-    cs: u32,
-    eflags: u32,
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
 }
 
 #[no_mangle]
@@ -58,17 +60,20 @@ pub extern "C" fn invalid_opcode_handler() {
 }
 
 #[no_mangle]
-pub extern "C" fn gpf_handler() {
-    crate::serial::write_fmt(format_args!("[E] EXCEPTION: General Protection Fault\n"));
+pub extern "C" fn gpf_handler(error_code: u64) {
+    crate::serial::write_fmt(format_args!("[E] EXCEPTION: General Protection Fault (error: 0x{:x})\n", error_code));
     arch::print_stack_trace();
     loop { arch::hlt(); }
 }
 
 #[no_mangle]
-pub extern "C" fn page_fault_handler() {
-    let cr2: u32;
+pub extern "C" fn page_fault_handler(error_code: u64) {
+    let cr2: u64;
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2); }
-    crate::serial::write_fmt(format_args!("[E] EXCEPTION: Page Fault at 0x{:08x}\n", cr2));
+    crate::serial::write_fmt(format_args!(
+        "[E] EXCEPTION: Page Fault at 0x{:016x} (error: 0x{:x})\n", 
+        cr2, error_code
+    ));
     arch::print_stack_trace();
     loop { arch::hlt(); }
 }
@@ -80,11 +85,11 @@ pub extern "C" fn double_fault_handler() {
 }
 
 #[no_mangle]
-pub extern "C" fn timer_handler(pushad_esp: u32) -> u32 {
+pub extern "C" fn timer_handler(pushad_rsp: u64) -> u64 {
     crate::timer::tick();
-    let new_esp = crate::scheduler::schedule(pushad_esp);
+    let new_rsp = crate::scheduler::schedule(pushad_rsp);
     eoi(0);
-    new_esp
+    new_rsp
 }
 
 #[no_mangle]

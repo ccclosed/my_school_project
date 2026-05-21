@@ -2,50 +2,131 @@ use core::arch::global_asm;
 
 global_asm!(
     r#"
-.section .multiboot_header, "a"
-.align 4
-    .long 0x1BADB002
-    .long 0
-    .long -(0x1BADB002)
+.section .multiboot2_header, "a"
+.align 8
+multiboot2_header_start:
+    .long 0xE85250D6                    // magic
+    .long 0                             // architecture (0 = i386)
+    .long multiboot2_header_end - multiboot2_header_start
+    .long -(0xE85250D6 + 0 + (multiboot2_header_end - multiboot2_header_start))
+    
+    // End tag
+    .word 0    // type
+    .word 0    // flags
+    .long 8    // size
+multiboot2_header_end:
 
+.section .boot, "ax"
+.code32
 .global bootstrap
 .global _start
-.global load_gdt
-.global reload_segments
-.global load_idt
-.global load_tss
-.global isr0
-.global isr6
-.global isr8
-.global isr13
-.global isr14
-.global irq0
-.global irq1
-.global irq12
-.extern kernel_main
-.extern divide_handler
-.extern invalid_opcode_handler
-.extern double_fault_handler
-.extern gpf_handler
-.extern page_fault_handler
-.extern timer_handler
-.extern keyboard_handler
-.extern mouse_handler
 
-.section .text
 bootstrap:
 _start:
-    lea esp, [stack_top]
+    cli
+    mov esp, offset boot_stack_top
+    
+    // Check for CPUID support
+    pushfd
+    pop eax
+    mov ecx, eax
+    xor eax, 0x200000
+    push eax
+    popfd
+    pushfd
+    pop eax
+    push ecx
+    popfd
+    xor eax, ecx
+    jz no_long_mode
+    
+    // Check for long mode support
+    mov eax, 0x80000000
+    cpuid
+    cmp eax, 0x80000001
+    jb no_long_mode
+    
+    mov eax, 0x80000001
+    cpuid
+    test edx, (1 << 29)
+    jz no_long_mode
+    
+    // Setup page tables for long mode
+    // PML4[0] -> PDPT
+    mov eax, offset pdpt
+    or eax, 0x3
+    mov dword ptr [pml4], eax
+    
+    // PDPT[0] -> PD
+    mov eax, offset pd
+    or eax, 0x3
+    mov dword ptr [pdpt], eax
+    
+    // Identity map first 1GB using 2MB pages
+    mov ecx, 0
+    mov eax, 0x83  // present, writable, huge page
+.fill_pd:
+    mov dword ptr [pd + ecx * 8], eax
+    mov dword ptr [pd + ecx * 8 + 4], 0
+    add eax, 0x200000
+    inc ecx
+    cmp ecx, 512
+    jl .fill_pd
+    
+    // Load PML4 into CR3
+    mov eax, offset pml4
+    mov cr3, eax
+    
+    // Enable PAE
+    mov eax, cr4
+    or eax, (1 << 5)
+    mov cr4, eax
+    
+    // Enable long mode (set EFER.LME)
+    mov ecx, 0xC0000080
+    rdmsr
+    or eax, (1 << 8)
+    wrmsr
+    
+    // Enable paging and protected mode
+    mov eax, cr0
+    or eax, (1 << 31) | (1 << 0)
+    mov cr0, eax
+    
+    // Load 64-bit GDT
+    lgdt [gdt64_pointer]
+    
+    // Far jump to 64-bit code
+    push 0x08
+    lea eax, [long_mode_start]
+    push eax
+    retf
+
+no_long_mode:
+    hlt
+    jmp no_long_mode
+
+.code64
+long_mode_start:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    
+    lea rsp, [stack_top]
     call kernel_main
 .hang:
     hlt
     jmp .hang
 
+.global load_gdt
 load_gdt:
-    mov eax, dword ptr [esp + 4]
-    lgdt [eax]
+    lgdt [rdi]
     ret
 
+.global reload_segments
 reload_segments:
     mov ax, 0x10
     mov ds, ax
@@ -54,99 +135,342 @@ reload_segments:
     mov gs, ax
     mov ss, ax
     push 0x08
-    lea eax, [reload_cs]
-    push eax
-    retf
+    lea rax, [reload_cs]
+    push rax
+    retfq
 reload_cs:
     ret
 
+.global load_idt
 load_idt:
-    mov eax, dword ptr [esp + 4]
-    lidt [eax]
+    lidt [rdi]
     ret
 
+.global load_tss
 load_tss:
-    mov ax, 0x18        // TSS_SELECTOR
+    mov ax, 0x28
     ltr ax
     ret
 
+.global isr0
 isr0:
-    pushad
+    push 0
+    push 0
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
     call divide_handler
-    popad
-    iretd
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    add rsp, 16
+    iretq
 
-// Invalid Opcode (exception 6, no error code)
+.global isr6
 isr6:
-    pushad
+    push 0
+    push 6
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
     call invalid_opcode_handler
-    popad
-    iretd
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    add rsp, 16
+    iretq
 
-// General Protection Fault (exception 13, has error code on stack)
-isr13:
-    pushad
-    call gpf_handler
-    popad
-    add esp, 4
-    iretd
-
-// Page Fault (exception 14, has error code on stack)
-isr14:
-    pushad
-    call page_fault_handler
-    popad
-    add esp, 4
-    iretd
-
+.global isr8
 isr8:
-    // Double fault pushes an error code. Save return info from original stack
-    // before switching to a dedicated stack (the original may have overflowed).
-    mov eax, [esp + 4]   // EIP
-    mov ebx, [esp + 8]   // CS
-    mov ecx, [esp + 12]  // EFLAGS
-    lea esp, [df_stack_top]
-    push ecx              // EFLAGS
-    push ebx              // CS
-    push eax              // EIP
-    pushad
+    // Double fault - switch to dedicated stack IMMEDIATELY
+    // Error code already on stack from CPU
+    lea rsp, [df_stack_top]
+    push 8
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
     call double_fault_handler
-    popad
-    iretd
+    // Double fault handler should never return
+.df_hang:
+    cli
+    hlt
+    jmp .df_hang
 
+.global isr13
+isr13:
+    // GPF has error code on stack
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
+    mov rdi, [rsp + 15*8]  // Get error code from stack
+    call gpf_handler
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    add rsp, 8  // Pop error code
+    iretq
+
+.global isr14
+isr14:
+    // Page fault has error code on stack
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
+    mov rdi, [rsp + 15*8]  // Get error code from stack
+    call page_fault_handler
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    add rsp, 8  // Pop error code
+    iretq
+
+.global irq0
 irq0:
-    push fs
-    push gs
-    pushad
-    push esp             // pass pointer to pushad frame as argument
-    call timer_handler   // returns new stack pointer in eax
-    add esp, 4           // clean up argument
-    mov esp, eax         // switch to next task's stack
-    popad
-    pop gs
-    pop fs
-    iretd
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
+    mov rdi, rsp
+    call timer_handler
+    mov rsp, rax
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    iretq
 
+.global irq1
 irq1:
-    pushad
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
     call keyboard_handler
-    popad
-    iretd
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    iretq
 
+.global irq12
 irq12:
-    pushad
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rdx
+    push rcx
+    push rbx
+    push rax
     call mouse_handler
-    popad
-    iretd
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    iretq
+
+.section .data
+.align 16
+gdt64:
+    .quad 0                             // Null descriptor
+    .quad 0x00AF9A000000FFFF            // Code segment (64-bit)
+    .quad 0x00CF92000000FFFF            // Data segment
+gdt64_pointer:
+    .word gdt64_pointer - gdt64 - 1
+    .quad gdt64
 
 .section .bss
+.align 4096
+pml4:
+    .space 4096
+pdpt:
+    .space 4096
+pd:
+    .space 4096
+
+.align 16
+boot_stack_bottom:
+    .space 16384
+boot_stack_top:
+
 .align 16
 stack_bottom:
-    .space 65536
+    .space 262144
 stack_top:
+
 .align 16
 df_stack_bottom:
-    .space 2048
+    .space 8192
 df_stack_top:
 "#
 );

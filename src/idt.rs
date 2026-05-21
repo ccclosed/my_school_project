@@ -6,26 +6,30 @@ use spin::Mutex;
 pub struct IdtEntry {
     offset_low: u16,
     selector: u16,
-    zero: u8,
+    ist: u8,
     type_attr: u8,
-    offset_high: u16,
+    offset_mid: u16,
+    offset_high: u32,
+    reserved: u32,
 }
 
 impl IdtEntry {
     fn set_handler_addr(&mut self, handler: usize) {
-        let addr = handler as u32;
+        let addr = handler as u64;
         self.offset_low = addr as u16;
-        self.offset_high = (addr >> 16) as u16;
+        self.offset_mid = (addr >> 16) as u16;
+        self.offset_high = (addr >> 32) as u32;
         self.selector = crate::gdt::KERNEL_CODE_SELECTOR;
-        self.zero = 0;
+        self.ist = 0;
         self.type_attr = 0x8E;
+        self.reserved = 0;
     }
 }
 
 #[repr(C, packed)]
 struct IdtPointer {
     limit: u16,
-    base: u32,
+    base: u64,
 }
 
 const IDT_LEN: usize = 256;
@@ -65,7 +69,7 @@ pub fn init() {
     let idt = IDT.lock();
     let ptr = IdtPointer {
         limit: (size_of::<[IdtEntry; IDT_LEN]>() - 1) as u16,
-        base: idt.as_ptr() as u32,
+        base: idt.as_ptr() as u64,
     };
     unsafe {
         load_idt(&ptr);
