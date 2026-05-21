@@ -146,16 +146,14 @@ fn parse_dhcp_reply(data: &[u8], xid: u32, mac: &[u8; 6]) -> Option<(u8, Option<
     let has_yiaddr = yiaddr != [0, 0, 0, 0];
     let yiaddr = if has_yiaddr { Some(yiaddr) } else { None };
 
-    // Parse options starting after magic cookie
-    let mut opt_start = DHCP_MSG_SIZE;
-    for i in DHCP_MSG_SIZE..data.len() {
-        if i + 3 <= data.len() && data[i..i + 4] == MAGIC_COOKIE {
-            opt_start = i + 4;
-            break;
-        }
+    // Parse options starting after magic cookie at fixed position 236
+    const MAGIC_COOKIE_POS: usize = 236;
+    if data.len() < MAGIC_COOKIE_POS + 4 { return None; }
+    if data[MAGIC_COOKIE_POS..MAGIC_COOKIE_POS + 4] != MAGIC_COOKIE {
+        return None;
     }
 
-    let (msg_type, subnet, gateway, dns, server_id) = parse_dhcp_options(&data[opt_start..]);
+    let (msg_type, subnet, gateway, dns, server_id) = parse_dhcp_options(&data[MAGIC_COOKIE_POS + 4..]);
     Some((msg_type, yiaddr, subnet, gateway, dns, server_id))
 }
 
