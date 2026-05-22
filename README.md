@@ -23,8 +23,9 @@
 
 ### Файловая система
 - **RamFS** - простая файловая система в памяти (create/read/write/delete)
-- **ext3** - read-only поддержка (superblock, inodes, indirect blocks)
-- **ATA PIO** - драйвер IDE-диска (чтение секторов, 28-bit LBA)
+- **ext3** - поддержка чтения и записи (superblock, inodes, bitmap allocation)
+- **ATA PIO** - драйвер IDE-диска (чтение/запись секторов, 28-bit LBA)
+- **Framebuffer** - графический режим через Multiboot2 (шрифт 8×16, команда `fb`)
 
 ### Shell
 Интерактивная командная оболочка с историей команд (Up/Down):
@@ -53,6 +54,7 @@
 - `ext3ls [path]` - список файлов на ext3
 - `ext3cat <path>` - чтение файла с ext3
 - `ext3info` - информация о ext3
+- `fb` - информация о графическом режиме
 
 ## Сборка
 
@@ -111,7 +113,7 @@
 ## Известные ограничения
 - Нет userspace (всё в ring 0)
 - TCP без congestion control, Nagle, SACK (базовая реализация)
-- ext3 только read-only (без журнала и записи)
+- ext3 без журнала (ext2-совместимый режим записи)
 - Scheduler без приоритетов
 - Сеть работает только в QEMU user mode (NAT)
 

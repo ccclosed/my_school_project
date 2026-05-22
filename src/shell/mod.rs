@@ -391,6 +391,7 @@ fn cmd_help() {
     println!("ext3ls  [path]    - list ext3 directory");
     println!("ext3cat <path>    - read ext3 file");
     println!("ext3info          - ext3 filesystem info");
+    println!("fb                - framebuffer info");
     println!("ping <ip>         - send ICMP echo (e.g. ping 10.0.2.2)");
 }
 
