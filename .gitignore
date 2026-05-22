@@ -1,0 +1,44 @@
+﻿# Build artifacts
+/target
+Cargo.lock
+/tools/rustc-filter.exe
+/tools/rustc-filter.pdb
+
+# IDE and editor files
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+qemu-out.txt
+qemu-err.txt
+
+# Documentation (except README)
+*.md
+!README.md
+
+# Images and media
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.ico
+
+# ISO and disk images
+*.iso
+*.img
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# AI tools
+.aider*
