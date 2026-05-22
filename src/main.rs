@@ -11,6 +11,7 @@ mod arch;
 mod asm;
 mod cpu;
 mod drivers;
+mod framebuffer;
 mod fs;
 mod gdt;
 mod idt;
@@ -42,6 +43,11 @@ pub extern "C" fn kernel_main() -> ! {
     memory::paging::enable();
     
     vga::init();
+
+    // Try framebuffer — if available via Multiboot2, use it
+    if framebuffer::init() {
+        println!("Framebuffer: OK");
+    }
 
     println!("Rust Kernel (x86_64) - boot OK");
     println!("Heap: {} KiB", memory::HEAP_SIZE / 1024);

@@ -37,6 +37,10 @@ _start:
     cli
     mov esp, offset boot_stack_top
     
+    // Save Multiboot2 magic and info pointer
+    mov dword ptr [mb2_magic], eax
+    mov dword ptr [mb2_info], ebx
+    
     // Check for CPUID support
     pushfd
     pop eax
@@ -471,6 +475,12 @@ gdt64_pointer:
     .quad gdt64
 
 .section .bss
+.align 8
+mb2_magic:
+    .space 4
+mb2_info:
+    .space 4
+
 .align 4096
 pml4:
     .space 4096

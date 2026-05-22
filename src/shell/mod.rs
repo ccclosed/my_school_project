@@ -161,6 +161,20 @@ pub fn run() -> ! {
                 }
             }
 
+            // Process mouse scroll events
+            while let Some(ev) = crate::mouse::pop_event() {
+                match ev {
+                    crate::mouse::MouseEvent::Scroll { delta } => {
+                        if delta > 0 {
+                            crate::vga::scroll_display_down(delta as usize);
+                        } else {
+                            crate::vga::scroll_display_up((-delta) as usize);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             crate::drivers::net::poll_and_dispatch();
             crate::arch::hlt();
         }
@@ -339,6 +353,7 @@ fn dispatch(line: &str) {
             }
         }
         "ext3info" => cmd_ext3info(),
+        "fb" => crate::framebuffer::cmd_fb(),
         _ => println!("unknown command: {}", cmd),
     }
 }
