@@ -150,23 +150,26 @@ pub fn poll_rx() -> Option<alloc::vec::Vec<u8>> {
 /// Poll for a packet and dispatch to the correct protocol handler.
 /// Call this periodically from the main loop to process incoming TCP/UDP/ICMP.
 pub fn poll_and_dispatch() {
-    if let Some(pkt) = poll_rx() {
+    loop {
+        let pkt = match poll_rx() {
+            Some(p) => p,
+            None => break,
+        };
         if let Some(eth) = ethernet::EthernetFrame::parse(&pkt) {
             if eth.ethertype == ethernet::ETHERTYPE_IPV4 {
                 if let Some(ip) = ipv4::Ipv4Packet::parse(eth.payload) {
                     let cfg = get_config();
                     let my_ip = cfg.map(|c| c.ip).unwrap_or([10, 0, 2, 15]);
                     if ip.dst != my_ip && ip.dst != [255, 255, 255, 255] {
-                        return; // not for us
+                        continue;
                     }
                     match ip.protocol {
                         6 => tcp::receive(ip.src, ip.dst, ip.payload),
-                        _ => {} // Other protocols handled elsewhere
+                        _ => {}
                     }
                 }
             }
         }
     }
-    // Also tick the TCP retransmit / timeout machinery
     tcp::poll();
 }

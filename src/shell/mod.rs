@@ -327,6 +327,18 @@ fn dispatch(line: &str) {
             }
         }
         "tcpstat" => cmd_tcpstat(),
+        "ext3ls" => {
+            let path = parts.next().unwrap_or("/");
+            cmd_ext3ls(path);
+        }
+        "ext3cat" => {
+            if let Some(path) = parts.next() {
+                cmd_ext3cat(path);
+            } else {
+                println!("usage: ext3cat <path>");
+            }
+        }
+        "ext3info" => cmd_ext3info(),
         _ => println!("unknown command: {}", cmd),
     }
 }
@@ -361,6 +373,9 @@ fn cmd_help() {
     println!("tcprecv <idx>     - receive data from connection");
     println!("tcpclose <idx>    - close TCP connection");
     println!("tcpstat           - list TCP connections");
+    println!("ext3ls  [path]    - list ext3 directory");
+    println!("ext3cat <path>    - read ext3 file");
+    println!("ext3info          - ext3 filesystem info");
     println!("ping <ip>         - send ICMP echo (e.g. ping 10.0.2.2)");
 }
 
@@ -1129,6 +1144,79 @@ fn cmd_tcpstat() {
         println!("[{}] {:12} :{}  -> {}.{}.{}.{}:{}",
             idx, state_str, local_port,
             remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], remote_port);
+    }
+}
+
+// ── ext3 commands ───────────────────────────────────────────────────────
+
+use spin::Mutex;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref EXT3: Mutex<Option<crate::fs::ext3::Ext3Fs>> = Mutex::new(None);
+}
+
+fn ext3_mount() {
+    let mut fs = EXT3.lock();
+    if fs.is_some() {
+        return;
+    }
+    match crate::fs::ext3::Ext3Fs::mount() {
+        Ok(f) => {
+            println!("ext3: mounted (block_size={})", f.block_size());
+            *fs = Some(f);
+        }
+        Err(e) => println!("ext3 mount: {}", e),
+    }
+}
+
+fn cmd_ext3ls(path: &str) {
+    ext3_mount();
+    let fs = EXT3.lock();
+    if let Some(ref fs) = *fs {
+        let entries = fs.list_dir(path);
+        match entries {
+            Ok(entries) => {
+                if entries.is_empty() {
+                    println!("(empty)");
+                } else {
+                    for (name, inode_num, ft) in &entries {
+                        let ft_char = match ft {
+                            2 => '/',
+                            7 => '@',
+                            _ => ' ',
+                        };
+                        println!("  {:>8}  {}{}", inode_num, name, ft_char);
+                    }
+                }
+            }
+            Err(e) => println!("ext3ls: {}", e),
+        }
+    }
+}
+
+fn cmd_ext3cat(path: &str) {
+    ext3_mount();
+    let fs = EXT3.lock();
+    if let Some(ref fs) = *fs {
+        match fs.read_file(path) {
+            Ok(data) => {
+                if let Ok(s) = core::str::from_utf8(&data) {
+                    println!("{}", s);
+                } else {
+                    println!("(binary, {} bytes)", data.len());
+                }
+            }
+            Err(e) => println!("ext3cat: {}", e),
+        }
+    }
+}
+
+fn cmd_ext3info() {
+    ext3_mount();
+    let fs = EXT3.lock();
+    if let Some(ref fs) = *fs {
+        println!("{}", fs);
     }
 }
 

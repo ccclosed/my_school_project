@@ -56,6 +56,8 @@ pub extern "C" fn kernel_main() -> ! {
     drivers::net::init();
     println!("Network init: OK");
 
+    drivers::ata::init();
+
     // Auto-configure network via DHCP if NIC is available
     let net_status = drivers::net::status();
     if net_status.kind != drivers::net::NicKind::None {
