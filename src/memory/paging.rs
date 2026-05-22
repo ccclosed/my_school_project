@@ -117,10 +117,21 @@ pub fn stats() -> (usize, usize, usize) {
     (FRAME_COUNT, free, FRAME_COUNT - free)
 }
 
-/// Enable 64-bit paging (already enabled by bootloader, this is a no-op for now).
-/// In x86_64, paging is enabled during the transition to long mode in asm.rs.
-/// This function exists for API compatibility but doesn't need to do anything.
+/// Enable 64-bit paging (already enabled by bootloader).
 pub fn enable() {
-    // Paging is already enabled by the bootloader in asm.rs
-    // We're using 2MB pages for the first 1GB (identity mapped)
+    // Paging already enabled from asm.rs transition to long mode
+}
+
+/// Identity-map a 1GB-aligned region with a 1GB huge page.
+/// No CR3 reload — caller must handle TLB if needed.
+pub fn map_1gb_page(phys: u64) {
+    extern "C" {
+        static mut pdpt: u64;
+    }
+    let pdpt_idx = ((phys >> 30) & 0x1FF) as usize;
+    let entry: u64 = (phys & 0xFFFF_FFFF_C000_0000) | 0x83;
+    unsafe {
+        let pdpt_ptr = core::ptr::addr_of_mut!(pdpt);
+        core::ptr::write_volatile(pdpt_ptr.add(pdpt_idx), entry);
+    }
 }

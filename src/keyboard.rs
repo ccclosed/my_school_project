@@ -17,6 +17,8 @@ pub enum KeyEvent {
     Enter,
     Escape,
     Ctrl(char),
+    PageUp,
+    PageDown,
 }
 
 fn encode(ev: KeyEvent) -> u32 {
@@ -30,6 +32,8 @@ fn encode(ev: KeyEvent) -> u32 {
         KeyEvent::Enter => 7 << 8,
         KeyEvent::Escape => 8 << 8,
         KeyEvent::Ctrl(c) => 9 << 8 | c as u32,
+        KeyEvent::PageUp => 10 << 8,
+        KeyEvent::PageDown => 11 << 8,
     }
 }
 
@@ -49,6 +53,8 @@ fn decode(val: u32) -> Option<KeyEvent> {
         7 => Some(KeyEvent::Enter),
         8 => Some(KeyEvent::Escape),
         9 => Some(KeyEvent::Ctrl(data as char)),
+        10 => Some(KeyEvent::PageUp),
+        11 => Some(KeyEvent::PageDown),
         _ => None,
     }
 }
@@ -103,6 +109,11 @@ static CTRL: AtomicBool = AtomicBool::new(false);
 static EXTENDED: AtomicBool = AtomicBool::new(false);
 
 pub fn handle_irq() {
+    // Only read if data is from keyboard (status bit 5 = 0 means keyboard)
+    let status = unsafe { x86::io::inb(0x64) };
+    if status & 0x20 != 0 {
+        return; // mouse data, let mouse handler deal with it
+    }
     let sc = unsafe { inb(PS2_DATA) };
 
     if sc == 0xE0 {
@@ -141,6 +152,8 @@ fn translate_extended(sc: u8) -> Option<KeyEvent> {
         0x50 => Some(KeyEvent::Down),
         0x4B => Some(KeyEvent::Left),
         0x4D => Some(KeyEvent::Right),
+        0x49 => Some(KeyEvent::PageUp),
+        0x51 => Some(KeyEvent::PageDown),
         _ => None,
     }
 }

@@ -129,6 +129,12 @@ pub fn run() -> ! {
                         line_len = 0;
                     }
                 }
+                Some(KeyEvent::PageUp) => {
+                    crate::vga::scroll_display_up(10);
+                }
+                Some(KeyEvent::PageDown) => {
+                    crate::vga::scroll_display_down(10);
+                }
                 Some(KeyEvent::Ctrl('c')) => {
                     for _ in 0..line_len { vga::backspace(); }
                     println!("^C");
@@ -354,6 +360,16 @@ fn dispatch(line: &str) {
         }
         "ext3info" => cmd_ext3info(),
         "fb" => crate::framebuffer::cmd_fb(),
+        "httpget" => {
+            let ip_str = parts.next();
+            let port_str = parts.next();
+            let path = parts.next().unwrap_or("/");
+            if let (Some(ip_str), Some(port_str)) = (ip_str, port_str) {
+                cmd_httpget(ip_str, port_str, path);
+            } else {
+                println!("usage: httpget <ip> <port> [path]");
+            }
+        }
         _ => println!("unknown command: {}", cmd),
     }
 }
@@ -392,6 +408,7 @@ fn cmd_help() {
     println!("ext3cat <path>    - read ext3 file");
     println!("ext3info          - ext3 filesystem info");
     println!("fb                - framebuffer info");
+    println!("httpget <ip> <p>  - HTTP GET request");
     println!("ping <ip>         - send ICMP echo (e.g. ping 10.0.2.2)");
 }
 
@@ -1234,5 +1251,69 @@ fn cmd_ext3info() {
     if let Some(ref fs) = *fs {
         println!("{}", fs);
     }
+}
+
+fn cmd_httpget(ip_str: &str, port_str: &str, path: &str) {
+    let ip = match parse_ipv4(ip_str) {
+        Some(ip) => ip,
+        None => { println!("httpget: invalid IP"); return; }
+    };
+    let port: u16 = match port_str.parse() {
+        Ok(p) => p,
+        Err(_) => { println!("httpget: invalid port"); return; }
+    };
+
+    let local_port = 2048 + (crate::timer::millis() % 63500) as u16;
+    let idx = match net::tcp::connect(local_port, ip, port) {
+        Ok(i) => i,
+        Err(e) => { println!("httpget: {}", e); return; }
+    };
+
+    println!("Connecting to {}:{}...", ip_str, port);
+
+    // Wait for connection
+    let deadline = crate::timer::millis() + 5000;
+    loop {
+        crate::drivers::net::poll_and_dispatch();
+        if let Ok((state, _, _, _, _)) = net::tcp::status(idx) {
+            if state == net::tcp::TcpState::Established {
+                break;
+            }
+        }
+        if crate::timer::millis() > deadline {
+            println!("Connection timeout");
+            return;
+        }
+        crate::arch::hlt();
+    }
+
+    yellowln!("Connected, sending request...");
+
+    let request = alloc::format!("GET {} HTTP/1.0\r\nHost: {}:{}\r\nConnection: close\r\n\r\n", path, ip_str, port);
+    match net::tcp::send(idx, request.as_bytes()) {
+        Ok(n) => println!("Sent {} bytes", n),
+        Err(e) => { println!("send: {}", e); return; }
+    }
+
+    // Receive response
+    let deadline = crate::timer::millis() + 10000;
+    let mut buf = [0u8; 4096];
+    loop {
+        crate::drivers::net::poll_and_dispatch();
+        match net::tcp::recv(idx, &mut buf) {
+            Ok(0) => {
+                if crate::timer::millis() > deadline { break; }
+                crate::arch::hlt();
+            }
+            Ok(n) => {
+                if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                    greenln!("{}", s);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let _ = net::tcp::close(idx);
 }
 

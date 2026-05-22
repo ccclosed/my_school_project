@@ -115,7 +115,7 @@ fn read_data() -> u8 {
 }
 
 fn try_read_data() -> Option<u8> {
-    for _ in 0..1000 {
+    for _ in 0..100_000 {
         unsafe {
             if inb(PS2_STATUS) & 0x01 != 0 {
                 return Some(inb(PS2_DATA));
@@ -126,37 +126,31 @@ fn try_read_data() -> Option<u8> {
     None
 }
 
-/// Initialize PS/2 mouse - minimal approach, don't touch keyboard
+/// Initialize PS/2 mouse — non-blocking, safe without mouse.
 pub fn init() {
     use crate::info;
 
-    // Just enable mouse port and IRQ12, nothing else
-    write_command(0xA8); // Enable mouse port
-    
-    // Send commands directly to mouse
-    write_command(0xD4);
-    write_data(0xF4); // Enable data reporting
-    let _ = try_read_data(); // ACK
-    
-    // Try scroll wheel magic
-    for rate in [200u8, 100, 80] {
-        write_command(0xD4);
-        write_data(0xF3);
-        let _ = try_read_data();
-        write_command(0xD4);
-        write_data(rate);
-        let _ = try_read_data();
+    // Enable mouse port first
+    write_command(0xA8);
+
+    // Verify
+    write_command(0x20);
+    let config = try_read_data().unwrap_or(0);
+    if config & 0x20 != 0 {
+        info!("Mouse: still disabled (cfg=0x{:02x})", config);
+        return;
     }
     
-    // Get device ID
-    write_command(0xD4);
-    write_data(0xF2);
-    let _ = try_read_data();
+    write_command(0xD4); write_data(0xF4); try_read_data();
+    for rate in [200u8, 100, 80] {
+        write_command(0xD4); write_data(0xF3); try_read_data();
+        write_command(0xD4); write_data(rate); try_read_data();
+    }
+    write_command(0xD4); write_data(0xF2); try_read_data();
     let device_id = try_read_data().unwrap_or(0);
 
     MOUSE_STATE.lock().has_scroll = device_id == 0x03 || device_id == 0x04;
     INITIALIZED.store(true, Ordering::Release);
-    
     info!("Mouse: ID=0x{:02x}", device_id);
 }
 
@@ -164,6 +158,12 @@ pub fn init() {
 pub fn handle_irq() {
     if !INITIALIZED.load(Ordering::Acquire) {
         return;
+    }
+
+    // Verify data is from mouse (status bit 5 = 1)
+    let status = unsafe { inb(PS2_STATUS) };
+    if status & 0x20 == 0 {
+        return; // keyboard data, ignore
     }
 
     let byte = unsafe { inb(PS2_DATA) };

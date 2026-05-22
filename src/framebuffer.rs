@@ -4,7 +4,7 @@
 
 use core::ptr;
 use core::fmt;
-use crate::{info, debug};
+use crate::println;
 
 // ── Multiboot2 externals ────────────────────────────────────────────────
 
@@ -136,6 +136,12 @@ pub struct FbConsole {
 
 // Raw pointer — no Mutex needed since init happens before interrupts
 static mut FB: *mut FbConsole = core::ptr::null_mut();
+static FB_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Returns true if framebuffer is active and should receive text output.
+pub fn is_active() -> bool {
+    FB_ACTIVE.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 impl FbConsole {
     unsafe fn draw_pixel(&self, x: u32, y: u32, color: u32) {
@@ -151,18 +157,48 @@ impl FbConsole {
     }
 
     fn draw_glyph(&self, gx: u32, gy: u32, fg: u32, bg: u32, g: &Glyph) {
+        let pitch = self.pitch as usize;
+        let bpp_bytes = (self.bpp as usize) / 8;
+        let fb = self.fb;
+        let w = self.width;
+        let h = self.height;
         for row in 0..16 {
             let bits = g[row];
+            let py = gy + row as u32;
+            if py >= h { break; }
+            let row_off = py as usize * pitch;
             for col in 0..8 {
+                let px = gx + col as u32;
+                if px >= w { break; }
+                let off = row_off + px as usize * bpp_bytes;
                 let c = if (bits >> (7 - col)) & 1 != 0 { fg } else { bg };
-                unsafe { self.draw_pixel(gx + col as u32, gy + row as u32, c); }
+                unsafe {
+                    if self.bpp == 32 {
+                        core::ptr::write_volatile(fb.add(off) as *mut u32, c);
+                    } else if self.bpp == 24 {
+                        core::ptr::write_volatile(fb.add(off), (c & 0xFF) as u8);
+                        core::ptr::write_volatile(fb.add(off+1), ((c>>8)&0xFF) as u8);
+                        core::ptr::write_volatile(fb.add(off+2), ((c>>16)&0xFF) as u8);
+                    }
+                }
             }
         }
     }
 
     fn scroll(&mut self) {
         let row_bytes = self.pitch as usize * 16;
-        unsafe { ptr::copy_nonoverlapping(self.fb.add(row_bytes), self.fb, (self.rows as usize - 1) * row_bytes); }
+        // Byte-by-byte volatile copy — framebuffer is MMIO, memcpy breaks it
+        for row in 1..self.rows as usize {
+            let src = row * row_bytes;
+            let dst = (row - 1) * row_bytes;
+            for i in 0..row_bytes {
+                unsafe {
+                    let b = core::ptr::read_volatile(self.fb.add(src + i));
+                    core::ptr::write_volatile(self.fb.add(dst + i), b);
+                }
+            }
+        }
+        // Clear last line
         self.cur_y = self.rows - 1;
         self.cur_x = 0;
         for x in 0..self.cols { self.draw_glyph(x * 8, self.cur_y * 16, self.fg, self.bg, glyph(b' ')); }
@@ -203,8 +239,38 @@ pub fn init() -> bool {
     let magic = unsafe { ptr::addr_of!(mb2_magic).read_volatile() };
     let info = unsafe { ptr::addr_of!(mb2_info).read_volatile() };
 
-    if magic != 0x36D76289 || info == 0 { return false; }
+    if magic == 0x2BADB002 && info != 0 {
+        return init_mb1(info);
+    }
+    if magic == 0x36D76289 && info != 0 {
+        return init_mb2(info);
+    }
 
+    crate::println!("fb: no mb (magic=0x{:08x} info=0x{:08x})", magic, info);
+    // Try direct probe of Bochs/QEMU LFB
+    probe_fallback()
+}
+
+/// Parse Multiboot1 info for framebuffer.
+fn init_mb1(info: u32) -> bool {
+    // Multiboot1 info structure: flags at offset 0
+    let flags = unsafe { *(info as *const u32) };
+    // Bit 12 (0x1000) = framebuffer info available
+    if flags & 0x1000 == 0 {
+        crate::println!("fb: mb1 no fb flag");
+        return false;
+    }
+    let addr = unsafe { *(info as *const u64).add(11) };  // offset 88
+    let pitch = unsafe { *((info as *const u8).add(96) as *const u32) };
+    let w = unsafe { *((info as *const u8).add(100) as *const u32) };
+    let h = unsafe { *((info as *const u8).add(104) as *const u32) };
+    let bpp = unsafe { *((info as *const u8).add(108) as *const u8) };
+
+    setup_fb(addr as u64, pitch, w, h, bpp)
+}
+
+/// Parse Multiboot2 info for framebuffer tag.
+fn init_mb2(info: u32) -> bool {
     let total = unsafe { &*(info as *const u32) };
     let mut off = 8usize;
 
@@ -219,26 +285,87 @@ pub fn init() -> bool {
             let w = unsafe { *((info as *const u8).add(off + 20) as *const u32) };
             let h = unsafe { *((info as *const u8).add(off + 24) as *const u32) };
             let bpp = unsafe { *((info as *const u8).add(off + 28) as *const u8) };
-
-            if addr != 0 && w > 0 && h > 0 {
-                let cols = w / 8;
-                let rows = h / 16;
-                info!("fb: {}x{}x{}bpp, {}x{} chars", w, h, bpp, cols, rows);
-                unsafe {
-                    FB = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(FbConsole {
-                        fb: addr as *mut u8, width: w, height: h, pitch, bpp,
-                        cols, rows, cur_x: 0, cur_y: 0, fg: 0x00AAAAAA, bg: 0x00000000,
-                    }));
-                    (&mut *FB).clear();
-                }
-                return true;
-            }
+            return setup_fb(addr, pitch, w, h, bpp);
         }
         off += tag_size as usize;
         off = (off + 7) & !7;
     }
-    debug!("fb: no framebuffer tag");
+    crate::println!("fb: no framebuffer tag in mb2 info");
     false
+}
+
+/// Probe known Bochs/QEMU VBE LFB addresses for a usable framebuffer.
+fn probe_fallback() -> bool {
+    crate::memory::paging::map_1gb_page(0xFC00_0000);
+    // Common QEMU -vga std LFB addresses
+    let candidates: [(u64, u32, u32, u32, u8); 2] = [
+        (0xFD00_0000, 1024, 768, 4096, 32),  // QEMU stdvga LFB
+        (0xE000_0000, 1024, 768, 4096, 32),  // Alternative
+    ];
+    for (addr, w, h, pitch, bpp) in &candidates {
+        // Probe: write a known pattern to first pixel, read it back
+        let fb = *addr as *mut u32;
+        unsafe {
+            let old = ptr::read_volatile(fb);
+            ptr::write_volatile(fb, 0xDEADBEEF);
+            let readback = ptr::read_volatile(fb);
+            ptr::write_volatile(fb, old);
+            if readback == 0xDEADBEEF {
+                crate::println!("fb: found at 0x{:08x}", addr);
+                return setup_fb(*addr, *pitch, *w, *h, *bpp);
+            }
+        }
+    }
+    crate::println!("fb: no framebuffer found (probe failed)");
+    false
+}
+
+fn setup_fb(addr: u64, pitch: u32, w: u32, h: u32, bpp: u8) -> bool {
+    if addr == 0 || w == 0 || h == 0 {
+        crate::println!("fb: bad fb params (addr=0x{:x} {}x{})", addr, w, h);
+        return false;
+    }
+    let cols = w / 8;
+    let rows = h / 16;
+    crate::info!("fb: {}x{}x{}bpp, {}x{} chars", w, h, bpp, cols, rows);
+    crate::println!("fb: {}x{}x{}bpp, {}x{} chars", w, h, bpp, cols, rows);
+    // Enable VBE first, then clear (LFB might not be ready before VBE enable)
+    //enable_vbe(w as u16, h as u16, bpp as u16);  // keep text mode active
+    unsafe {
+        // Create console BEFORE setting FB_ACTIVE
+        FB = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(FbConsole {
+            fb: addr as *mut u8, width: w, height: h, pitch, bpp,
+            cols, rows, cur_x: 0, cur_y: 0, fg: 0x00AAAAAA, bg: 0x00000000,
+        }));
+        // Fast zero fill with 64-bit writes (much faster than per-pixel)
+        let fb_dwords = (pitch as usize * h as usize) / 8;
+        let fb64 = addr as *mut u64;
+        for i in 0..fb_dwords {
+            core::ptr::write_volatile(fb64.add(i), 0);
+        }
+    }
+    FB_ACTIVE.store(true, core::sync::atomic::Ordering::Release);
+    true
+}
+
+/// Enable VBE graphics mode through Bochs/QEMU VBE ports (0x1CE/0x1CF).
+fn enable_vbe(xres: u16, yres: u16, bpp: u16) {
+    use x86::io::outw;
+    // Check Bochs VBE ID
+    unsafe {
+        outw(0x1CE, 0); // VBE_DISPI_INDEX_ID
+        let id = x86::io::inw(0x1CF);
+        if id < 0xB0C0 || id > 0xB0C5 {
+            crate::println!("fb: not Bochs VBE (id=0x{:04x}), using text mode", id);
+            return;
+        }
+        // Disable before setting params
+        outw(0x1CE, 4); outw(0x1CF, 0); // disable
+        outw(0x1CE, 1); outw(0x1CF, xres);
+        outw(0x1CE, 2); outw(0x1CF, yres);
+        outw(0x1CE, 3); outw(0x1CF, bpp);
+        outw(0x1CE, 4); outw(0x1CF, 0x41); // enable + LFB
+    }
 }
 
 pub fn write_fmt(args: core::fmt::Arguments) {

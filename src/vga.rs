@@ -274,6 +274,33 @@ macro_rules! println {
     }};
 }
 
+#[macro_export]
+macro_rules! redln {
+    ($($arg:tt)*) => {{
+        $crate::vga::set_color($crate::vga::Color::LightRed, $crate::vga::Color::Black);
+        $crate::println!($($arg)*);
+        $crate::vga::set_color($crate::vga::Color::LightGray, $crate::vga::Color::Black);
+    }};
+}
+
+#[macro_export]
+macro_rules! greenln {
+    ($($arg:tt)*) => {{
+        $crate::vga::set_color($crate::vga::Color::LightGreen, $crate::vga::Color::Black);
+        $crate::println!($($arg)*);
+        $crate::vga::set_color($crate::vga::Color::LightGray, $crate::vga::Color::Black);
+    }};
+}
+
+#[macro_export]
+macro_rules! yellowln {
+    ($($arg:tt)*) => {{
+        $crate::vga::set_color($crate::vga::Color::Yellow, $crate::vga::Color::Black);
+        $crate::println!($($arg)*);
+        $crate::vga::set_color($crate::vga::Color::LightGray, $crate::vga::Color::Black);
+    }};
+}
+
 pub fn clear_screen() {
     WRITER.lock().clear();
     commit_scrollback();

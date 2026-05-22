@@ -44,12 +44,10 @@ pub extern "C" fn kernel_main() -> ! {
     
     vga::init();
 
-    // Try framebuffer — if available via Multiboot2, use it
-    if framebuffer::init() {
-        println!("Framebuffer: OK");
-    }
+    mouse::init();
+    //framebuffer::init();
 
-    println!("Rust Kernel (x86_64) - boot OK");
+    greenln!("Rust Kernel (x86_64) - boot OK");
     println!("Heap: {} KiB", memory::HEAP_SIZE / 1024);
 
     // Quick heap sanity check before heavier subsystems.

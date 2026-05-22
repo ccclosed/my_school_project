@@ -28,8 +28,11 @@ pub fn read() -> RtcTime {
     let is_binary = (reg_b & 0x04) != 0;
     let is_24h = (reg_b & 0x02) != 0;
 
-    // Wait for RTC to finish updating (UIP bit clear)
-    while read_reg(0x0A) & 0x80 != 0 {
+    // Wait for RTC to finish updating (UIP bit clear), with timeout
+    for _ in 0..100_000 {
+        if read_reg(0x0A) & 0x80 == 0 {
+            break;
+        }
         core::hint::spin_loop();
     }
 
@@ -41,7 +44,10 @@ pub fn read() -> RtcTime {
     // Double-read seconds; if changed, RTC was updating — re-read everything
     let sec2 = read_reg(0x00);
     if sec2 != sec1 {
-        while read_reg(0x0A) & 0x80 != 0 {
+        for _ in 0..100_000 {
+            if read_reg(0x0A) & 0x80 == 0 {
+                break;
+            }
             core::hint::spin_loop();
         }
         sec = read_reg(0x00);
